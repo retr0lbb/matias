@@ -18,7 +18,7 @@ export class AiExpensesFactory{
                 return new CheapModel(this.configService.getOrThrow<string>("CHEAP_PROVIDER_KEY"))
             }
             case AIExpense.EXPENSIVE:{
-                return new ExpensiveModel(this.configService.getOrThrow<string>("CHEAP_PROVIDER_KEY"))
+                return new ExpensiveModel(this.configService.getOrThrow<string>("EXPENSIVE_PROVIDER_KEY"))
             }
             case AIExpense.NORMAL:{
                 return new CheapModel(this.configService.getOrThrow<string>("CHEAP_PROVIDER_KEY"))
