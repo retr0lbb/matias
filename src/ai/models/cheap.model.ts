@@ -13,9 +13,11 @@ export class CheapModel implements AiProvider{
     async generate(input: { message: string; }): Promise<string> {
 
         const interaction = await this.client.interactions.create({
-            model: "gemini-2.5-flash",
+            model: "gemini-3.1-flash-lite",
             input: input.message
         })
+
+        console.log(interaction)
 
         return interaction.output_text ?? ""
     }

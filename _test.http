@@ -1,0 +1,9 @@
+@baseUrl = http://localhost:3000
+
+POST {{baseUrl}}/ai/chat
+Content-Type: application/json
+
+{
+    "expense": "NORMAL",
+    "prompt": "Hello GEMINI, if you're listening plese say 'BAU BAU'"
+}
