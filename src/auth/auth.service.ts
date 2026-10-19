@@ -1,4 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    Injectable,
+    NotFoundException,
+    UnauthorizedException,
+} from '@nestjs/common';
 import { InjectDrizzle } from '@nestjs/drizzle';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { CredentialService } from '../shared/services/credentials.js';
@@ -23,7 +29,7 @@ export class AuthService {
             )
             
         if(alreadyExistsWithEmail){
-            throw new Error("Email already exists ")
+            throw new ConflictException("Email already exists")
         }
 
         const hashedPass = await this.credSerivice.hashPassword(payload.password)
@@ -52,16 +58,16 @@ export class AuthService {
             )
         
         if(!exists){
-            throw new Error("404 not found")
+            throw new NotFoundException("User not found")
         }
 
         if(!exists.passwordHash){
-            throw new Error("Account created with google")
+            throw new BadRequestException("Account created with google")
         }
 
-        if(await this.credSerivice.comparePassword(payload.password, exists.passwordHash)){
-            throw new Error("Forbidden error")
+        if(!(await this.credSerivice.comparePassword(payload.password, exists.passwordHash))){
+            throw new UnauthorizedException("Invalid credentials")
         }
-        
+
     }
 }
