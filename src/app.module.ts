@@ -4,7 +4,6 @@ import { AiModule } from './ai/ai.module.js';
 import { RagModule } from './rag/rag.module.js';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module.js';
-import { SharedModule } from './shared/shared.module.js';
 import { DrizzleModule } from '@nestjs/drizzle';
 import {drizzle} from "drizzle-orm/node-postgres"
 
@@ -21,7 +20,6 @@ import {drizzle} from "drizzle-orm/node-postgres"
       isGlobal: true
     }),
     AuthModule,
-    SharedModule,
   ]
 })
 export class AppModule {}

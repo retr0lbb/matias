@@ -7,3 +7,13 @@ Content-Type: application/json
     "expense": "NORMAL",
     "prompt": "Hello GEMINI, if you're listening plese say 'BAU BAU'"
 }
+
+###
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "yutaOkkotsu@mail.com",
+    "name": "Yuta Okkotsu",
+    "password": "123123"
+}
