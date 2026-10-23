@@ -8,6 +8,7 @@ import { AiModule } from './ai/ai.module.js';
 import { RagModule } from './rag/rag.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { SharedModule } from './shared/shared.module.js';
+import { AuthenticationModule } from '@nestjs/authentication';
 
 @Module({
   imports: [
@@ -22,7 +23,12 @@ import { SharedModule } from './shared/shared.module.js';
         connection: configService.getOrThrow<string>('DATABASE_URL'),
       }),
     }),
-
+    AuthenticationModule.forRoot({
+      session: {
+        absoluteTtl: "14d",
+        idleTtl: "4d"
+      }
+    }),
     RouterModule,
     AiModule,
     RagModule,

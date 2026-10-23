@@ -18,6 +18,8 @@ export class AuthService {
         private readonly credSerivice: CredentialService
     ){}
 
+    private normalize = (email: string) => email.trim().normalize('NFC').toLowerCase();
+
     async createAccount(payload: {email: string, name: string, password: string}){
         const [alreadyExistsWithEmail] = await this.db
             .select()
@@ -34,40 +36,44 @@ export class AuthService {
 
         const hashedPass = await this.credSerivice.hashPassword(payload.password)
 
-        await this.db
+        const [user] = await this.db
             .insert(userTable)
             .values(
                 {
-                    email: payload.email,
+                    email: this.normalize(payload.email),
                     name: payload.name,
                     emailVerified: false,
                     loginProvider: "LOCAL",
                     passwordHash: hashedPass
                 }
-            )
+            ).returning()
+
+        return user
     }
 
     async logInAccount(payload: {email: string, password: string}){
-        const [exists] = await this.db
+        const [user] = await this.db
             .select()
             .from(userTable)
             .where(
                 eq(
-                    userTable.email, payload.email
+                    userTable.email, this.normalize(payload.email)
                 )
             )
         
-        if(!exists){
+        if(!user){
             throw new NotFoundException("User not found")
         }
 
-        if(!exists.passwordHash){
+        if(!user.passwordHash){
             throw new BadRequestException("Account created with google")
         }
 
-        if(!(await this.credSerivice.comparePassword(payload.password, exists.passwordHash))){
+        if(!(await this.credSerivice.comparePassword(payload.password, user.passwordHash))){
             throw new UnauthorizedException("Invalid credentials")
         }
+
+        return user
 
     }
 }
