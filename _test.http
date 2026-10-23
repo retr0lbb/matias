@@ -8,7 +8,7 @@
 ### CHAT
 POST {{baseUrl}}/ai/chat
 Content-Type: application/json
-Cookie: __Host-sid=yQ4XdfIa8IMkBgFX71FihYaG9Rxv_0s2UchnflhOJBQ
+Cookie: __Host-sid=rBdd4GKOU-qKxjz4WcdwD-B2fLK59PyvxBJrE_ECk9k
 
 {
     "expense": "NORMAL",
@@ -39,5 +39,9 @@ POST http://localhost:3000/auth/email/verify
 Content-Type: application/json
 
 {
-    "token": ""
+    "token": "WBu9xINqEzxOFPT-Vc7grDpKe_NOO9Ortebb4eG2WHQ"
 }
+
+### RESEND LINK
+POST {{baseUrl}}/auth/email/verification
+Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU

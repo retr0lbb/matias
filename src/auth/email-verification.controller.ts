@@ -22,7 +22,6 @@ export class EmailVerificationController{
         return { email: verified.email, emailVerified: true };
     }
 
-
     @Post('verification')
     @HttpCode(202)
     async resend(@CurrentUser() user: User){
