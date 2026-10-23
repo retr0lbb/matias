@@ -1,9 +1,9 @@
 
 @baseUrl = http://localhost:3000
 
-@email = retr0man@lbb.com
+@email = retr0lbb@gmail.com.br
 @pass = retr0lbb
-@name = Retro Man
+@name = Henrique Barbosa Sampaio
 
 ### CHAT
 POST {{baseUrl}}/ai/chat
@@ -31,4 +31,12 @@ Content-Type: application/json
 {
     "email": "{{email}}",
     "password": "{{pass}}"
+}
+
+### GERA O LINK DE CONFIRMACAO DE EMAIL
+POST http://localhost:3000/auth/email/verify
+Content-Type: application/json
+
+{
+    "token": ""
 }

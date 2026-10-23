@@ -1,12 +1,13 @@
 import { Body, Controller, HttpCode, Post, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service.js';
-import { Public, SignInService } from '@nestjs/authentication';
+import { EmailVerificationService, Public, SignInService } from '@nestjs/authentication';
 
 @Controller('auth')
 export class AuthController {
     constructor(
         private readonly authService: AuthService,
-        private readonly signInService: SignInService
+        private readonly signInService: SignInService,
+        private readonly emailVerificationService: EmailVerificationService,
     ){}
 
     @Public()
@@ -14,6 +15,7 @@ export class AuthController {
     async registerUser(@Body() body: {email: string, name: string, password: string}){
         const user = await this.authService.createAccount(body)
         await this.signInService.signIn(user.id, {method: "password"})
+        await this.emailVerificationService.send(user);
         return user
     }
 
