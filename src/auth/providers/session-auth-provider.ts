@@ -19,7 +19,7 @@ export class SessionAuth extends SessionCookieProvider<User>{
 
     protected async validate(session: SessionRecord): Promise<{ id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; } | { id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; } | null | undefined> {
         const [user] = await this.db.select().from(userTable).where(
-            eq(userTable.id, session.id)
+            eq(userTable.id, session.userId)
         )
         return user
     }

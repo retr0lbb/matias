@@ -8,6 +8,7 @@
 ### CHAT
 POST {{baseUrl}}/ai/chat
 Content-Type: application/json
+Cookie: __Host-sid=yQ4XdfIa8IMkBgFX71FihYaG9Rxv_0s2UchnflhOJBQ
 
 {
     "expense": "NORMAL",
