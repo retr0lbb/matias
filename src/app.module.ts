@@ -11,6 +11,7 @@ import { SharedModule } from './shared/shared.module.js';
 import { AuthenticationModule, google } from '@nestjs/authentication';
 import { FileTemplateEngine, LogMailTransport, MailModule, SmtpTransport } from '@nestjs/mail';
 import { join } from 'node:path';
+import { DocumentsModule } from './documents/documents.module.js';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { join } from 'node:path';
     RagModule,
     AuthModule,
     SharedModule,
+    DocumentsModule,
   ],
 })
 export class AppModule {}
