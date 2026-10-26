@@ -4,8 +4,6 @@ import { User, userTable } from "../../db/schemas/user.js";
 import { InjectDrizzle } from "@nestjs/drizzle";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
-import { error } from "console";
-
 
 @Injectable()
 export class SessionAuth extends SessionCookieProvider<User>{
@@ -17,7 +15,7 @@ export class SessionAuth extends SessionCookieProvider<User>{
         registry.registerProvider(this)
     }
 
-    protected async validate(session: SessionRecord): Promise<{ id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; } | { id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; } | null | undefined> {
+    protected async validate(session: SessionRecord): Promise<{ id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; googleSubject: string | null; } | { id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; googleSubject: string | null;} | null | undefined> {
         const [user] = await this.db.select().from(userTable).where(
             eq(userTable.id, session.userId)
         )

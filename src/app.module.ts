@@ -8,7 +8,7 @@ import { AiModule } from './ai/ai.module.js';
 import { RagModule } from './rag/rag.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { SharedModule } from './shared/shared.module.js';
-import { AuthenticationModule } from '@nestjs/authentication';
+import { AuthenticationModule, google } from '@nestjs/authentication';
 import { FileTemplateEngine, LogMailTransport, MailModule, SmtpTransport } from '@nestjs/mail';
 import { join } from 'node:path';
 
@@ -36,7 +36,16 @@ import { join } from 'node:path';
         absoluteTtl: "14d",
         idleTtl: "4d"
       },
-      emailVerification: {url: `${process.env.APP_URL}/verify-email`}
+      emailVerification: {url: `${process.env.APP_URL}/verify-email`},
+      oidc: {
+        callbackUrl: `${process.env.GOOGLE_REDIRECT_URL}`,
+        providers: {
+          google: google({
+            clientId: process.env.GOOGLE_CLIENT_ID!,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET!
+          })
+        }
+      }
     }),
     RouterModule,
     AiModule,

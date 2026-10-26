@@ -1,9 +1,9 @@
 
 @baseUrl = http://localhost:3000
 
-@email = retr0lbb@gmail.com.br
+@email = sistemas@saude.matita.com.br
 @pass = retr0lbb
-@name = Henrique Barbosa Sampaio
+@name = Matita akinator
 
 ### CHAT
 POST {{baseUrl}}/ai/chat
@@ -34,6 +34,9 @@ Content-Type: application/json
     "password": "{{pass}}"
 }
 
+### GOOGLE LOGIN
+GET http://localhost:3000/auth/oidc/google/login
+
 ### GERA O LINK DE CONFIRMACAO DE EMAIL
 POST http://localhost:3000/auth/email/verify
 Content-Type: application/json
@@ -45,3 +48,6 @@ Content-Type: application/json
 ### RESEND LINK
 POST {{baseUrl}}/auth/email/verification
 Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
+
+###
+GET http://localhost:3000/me

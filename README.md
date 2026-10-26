@@ -118,4 +118,8 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 
 # TODO
-- [ ] fix .env error, not reading new keys
+- [x] fix .env error, not reading new keys
+- [x] add session login
+- [ ] add MFA?
+- [ ] add zod validation pipeline
+- [ ] add sign in with google thingee
