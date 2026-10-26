@@ -51,3 +51,7 @@ Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
 
 ###
 GET http://localhost:3000/me
+
+###
+
+GET {{baseUrl}}/documents
