@@ -29,9 +29,4 @@ export class CheapModel implements AiProvider{
             }
         }
     }
-
-
-    loadMemory(data: unknown): Promise<void> {
-        //bota memoria no modelo
-    }
 }

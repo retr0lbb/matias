@@ -1,7 +1,6 @@
 
 export interface AiProvider{
-    loadMemory(data: unknown): Promise<void>
-    generate(input: {message: string}): Promise<AIResponse>
+  generate(input: {message: string}): Promise<AIResponse>
 }
 
 export type AIResponse = {
