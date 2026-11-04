@@ -5,14 +5,16 @@
 @pass = retr0lbb
 @name = Matita akinator
 
+
+
 ### CHAT
-POST {{baseUrl}}/ai/chat
+POST {{baseUrl}}/ai/chat?conversationId=dad8972f-0959-48cf-b0eb-277635ce790b
 Content-Type: application/json
-Cookie: __Host-sid=rBdd4GKOU-qKxjz4WcdwD-B2fLK59PyvxBJrE_ECk9k
+Cookie: __Host-sid=ChQZML4HoCtltQqaS58CIIjJlk1jT5CKOYlU9Zb-fZ0
 
 {
     "expense": "NORMAL",
-    "prompt": "Hello GEMINI, if you're listening please say 'BAU BAU'"
+    "prompt": "What is the life purpose?"
 }
 
 ### REGISTER USER
@@ -42,7 +44,7 @@ POST http://localhost:3000/auth/email/verify
 Content-Type: application/json
 
 {
-    "token": "WBu9xINqEzxOFPT-Vc7grDpKe_NOO9Ortebb4eG2WHQ"
+    "token": "8OtTl7DbbmJBe_4EV5cYg_oTntRcI7UnDFccl4zkNp4"
 }
 
 ### RESEND LINK
