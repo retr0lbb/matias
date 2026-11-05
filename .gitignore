@@ -57,3 +57,9 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+
+# TEST FILES FOR UPLOAD
+_big_pdf.pdf
+_simple_docx.docx
+_small_pdf.pdf

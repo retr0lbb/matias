@@ -8,13 +8,13 @@
 
 
 ### CHAT
-POST {{baseUrl}}/ai/chat?conversationId=dad8972f-0959-48cf-b0eb-277635ce790b
+POST {{baseUrl}}/ai/chat?conversationId=1efd2089-496f-4da0-9963-ad723ed0b874
 Content-Type: application/json
-Cookie: __Host-sid=ChQZML4HoCtltQqaS58CIIjJlk1jT5CKOYlU9Zb-fZ0
+Cookie: __Host-sid=pCfuq3C1ew5_jbP15bGdKD9gWcy-d1thzTZO9UMM1LI
 
 {
     "expense": "NORMAL",
-    "prompt": "What is the life purpose?"
+    "prompt": "The curriculum i have sent, what is the name of the person and what they do?"
 }
 
 ### REGISTER USER
@@ -54,6 +54,19 @@ Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
 ###
 GET http://localhost:3000/me
 
-###
 
-GET {{baseUrl}}/documents
+### UPLOAD ONE ITERATION OF DOCUMENT
+POST {{baseUrl}}/rag/documents
+Cookie: __Host-sid=3GXb82enqXwp3W0G0HzGn5PaqN_jJeOWW1IZadjXHP8
+Content-Type: multipart/form-data; boundary=MyBoundary
+
+--MyBoundary
+Content-Disposition: form-data; name="file"; filename="_big_pdf.pdf"
+Content-Type: application/pdf
+
+< ./_big_pdf.pdf
+--MyBoundary--
+
+###
+GET {{baseUrl}}/rag/documents/9893bd0d-4915-4a36-b5c1-a3af3b6b10a6
+Cookie: __Host-sid=3GXb82enqXwp3W0G0HzGn5PaqN_jJeOWW1IZadjXHP8

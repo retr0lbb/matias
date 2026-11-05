@@ -1,0 +1,70 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  UploadedFile,
+  UploadedFiles,
+  UseInterceptors,
+} from "@nestjs/common";
+import { Authenticate, CurrentUser } from "@nestjs/authentication";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type User } from "../db/schemas/user.js";
+import { RagDocumentsService } from "./rag-documents.service.js";
+
+const TEMP_DIR = join(tmpdir(), "matias-rag");
+mkdirSync(TEMP_DIR, { recursive: true });
+
+const SINGLE_MAX_BYTES = 200 * 1024 * 1024;
+const BATCH_MAX_BYTES = 20 * 1024 * 1024;
+const BATCH_MAX_FILES = 10;
+
+@Authenticate({ verifiedEmail: true })
+@Controller("rag/documents")
+export class RagDocumentsController {
+  constructor(private readonly documentsService: RagDocumentsService) {}
+
+  @Post()
+  @UseInterceptors(
+    FileInterceptor("file", {
+      dest: TEMP_DIR,
+      limits: { fileSize: SINGLE_MAX_BYTES },
+    }),
+  )
+  upload(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: User,
+    @Body("conversationId") conversationId?: string,
+  ) {
+    return this.documentsService.uploadOne(file, user.id, conversationId);
+  }
+
+  @Post("batch")
+  @UseInterceptors(
+    FilesInterceptor("files", BATCH_MAX_FILES, {
+      dest: TEMP_DIR,
+      limits: { fileSize: BATCH_MAX_BYTES },
+    }),
+  )
+  uploadMany(
+    @UploadedFiles() files: Express.Multer.File[] | undefined,
+    @CurrentUser() user: User,
+    @Body("conversationId") conversationId?: string,
+  ) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException("At least one file is required");
+    }
+
+    return this.documentsService.uploadMany(files, user.id, conversationId);
+  }
+
+  @Get(":id")
+  status(@Param("id") id: string, @CurrentUser() user: User) {
+    return this.documentsService.getStatus(id, user.id);
+  }
+}
