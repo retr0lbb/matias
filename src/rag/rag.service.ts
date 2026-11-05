@@ -9,7 +9,7 @@ import {
   ragDocumentsTable,
   type RagDocument,
 } from "../db/schemas/rag-document.js";
-import { chunkText } from "./chunker.js";
+import { chunkText, type TextChunk } from "./chunker.js";
 import { EmbeddingService } from "./embedding.service.js";
 import { extractDocxText } from "./extractors/docx.extractor.js";
 import { extractPdfText } from "./extractors/pdf.extractor.js";
@@ -61,7 +61,7 @@ export class RagService {
         throw new Error("Document has no extractable text");
       }
 
-      const chunks = chunkText(text);
+      const chunks = dedupeChunks(chunkText(text));
       if (chunks.length === 0) {
         throw new Error("Document produced no chunks");
       }
@@ -116,11 +116,7 @@ export class RagService {
       throw new Error("Query must not be empty");
     }
 
-    const [vector] = await this.embeddingService.embed([trimmed]);
-    if (!vector) {
-      throw new Error("Could not embed the query");
-    }
-
+    const vector = await this.embeddingService.embedQuery(trimmed);
     const distance = cosineDistance(ragChunksTable.embedding, vector);
 
     const rows = await this.db
@@ -162,6 +158,26 @@ export class RagService {
     }));
   }
 
+  /** Cheap indexed check so the chat can skip query embedding entirely. */
+  async hasReadyDocuments(
+    userId: string,
+    conversationId: string,
+  ): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: ragDocumentsTable.id })
+      .from(ragDocumentsTable)
+      .where(
+        and(
+          eq(ragDocumentsTable.userId, userId),
+          eq(ragDocumentsTable.conversationId, conversationId),
+          eq(ragDocumentsTable.status, "READY"),
+        ),
+      )
+      .limit(1);
+
+    return row !== undefined;
+  }
+
   private extractText(document: RagDocument): Promise<string> {
     const extension = extname(document.filename).toLowerCase();
 
@@ -190,4 +206,20 @@ export class RagService {
       );
     }
   }
+}
+
+// PDFs repeat headers/footers on every page. Embedding the same text twice
+// spends quota and returns identical hits, so keep only the first occurrence.
+function dedupeChunks(chunks: TextChunk[]): TextChunk[] {
+  const seen = new Set<string>();
+
+  return chunks.filter((chunk) => {
+    const key = chunk.content.replace(/\s+/g, " ").trim().toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 }

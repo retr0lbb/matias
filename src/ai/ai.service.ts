@@ -76,26 +76,21 @@ export class AiService {
       conversation = newConversation
     }
 
-    const history = await this.db.select({
-      role: messagesTable.role,
-      content: messagesTable.content,
-    })
-      .from(messagesTable)
-      .where(eq(messagesTable.conversationId, conversation.id))
-      .orderBy(desc(messagesTable.createdAt))
-      .limit(HISTORY_LIMIT)
-
-    // Retrieval is best-effort: an embedding failure (e.g. quota) should not
-    // take down the chat.
-    let chunks: RagSearchResult[] = []
-    try {
-      chunks = await this.ragService.search(prompt, loggedUser, {
-        conversationId: conversation.id,
+    // History and retrieval are independent; run them together.
+    // A conversation created just now cannot have documents yet.
+    const [history, chunks] = await Promise.all([
+      this.db.select({
+        role: messagesTable.role,
+        content: messagesTable.content,
       })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.logger.warn(`RAG search failed, answering without context: ${message}`)
-    }
+        .from(messagesTable)
+        .where(eq(messagesTable.conversationId, conversation.id))
+        .orderBy(desc(messagesTable.createdAt))
+        .limit(HISTORY_LIMIT),
+      conversationId
+        ? this.retrieveContext(prompt, loggedUser, conversation.id)
+        : Promise.resolve([]),
+    ])
 
     const input = buildRagPrompt(prompt, chunks, history.reverse())
 
@@ -119,6 +114,27 @@ export class AiService {
 
     return message.output_text
   }
+
+  // Retrieval is best-effort: an embedding failure (e.g. quota) should not
+  // take down the chat. Conversations without READY documents skip the query
+  // embedding call entirely.
+  private async retrieveContext(
+    prompt: string,
+    userId: string,
+    conversationId: string,
+  ): Promise<RagSearchResult[]> {
+    try {
+      if (!(await this.ragService.hasReadyDocuments(userId, conversationId))) {
+        return []
+      }
+
+      return await this.ragService.search(prompt, userId, { conversationId })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.logger.warn(`RAG search failed, answering without context: ${message}`)
+      return []
+    }
+  }
 }
 
 function buildRagPrompt(
@@ -136,7 +152,7 @@ function buildRagPrompt(
         chunks
           .map(
             (chunk, index) =>
-              `[${index + 1}] ${chunk.filename} (chunk ${chunk.chunkIndex}, similarity ${chunk.similarity})\n${chunk.content}`,
+              `[${index + 1}] ${chunk.filename}\n${chunk.content}`,
           )
           .join("\n\n"),
     )

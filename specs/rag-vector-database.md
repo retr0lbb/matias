@@ -8,7 +8,37 @@ Objetivo: endpoints onde o usuário autenticado (e-mail confirmado) envia docume
 
 **Fronteira de módulos:** todo o parsing/processamento de documentos desta feature vive em `src/rag/`. O `DocumentsModule` continua dono da geração de documentos a partir de JSON (o handler `memeMax` permanece **intocado**). O RAG não mexe em `src/documents/`.
 
-Este documento é o plano de implementação. Nada aqui foi implementado ainda.
+Este documento é o plano de implementação. O núcleo foi implementado (ver "Status da implementação"); as melhorias pendentes estão em "Fase 2 — melhorias de velocidade".
+
+## Status da implementação (verificado em 2026-11-05)
+
+| Item | Status | Observação |
+|---|---|---|
+| Schemas `rag_documents` / `rag_chunks` + `conversationId` | ✅ | `src/db/schemas/rag-*.ts` |
+| Migration com `CREATE EXTENSION vector` e índice HNSW | ✅ | `drizzle/20261105142834_steep_skin`, `20261105154318_slow_sharon_carter` |
+| Chunker local (~4 chars/token, 512/128) | ✅ | `src/rag/chunker.ts` |
+| Embedding (768 dims, lote 10, pacing, retry 429) | ✅ | `src/rag/embedding.service.ts` |
+| Extratores PDF (`pdf-parse` v2) e DOCX (`mammoth`) | ✅ | `src/rag/extractors/` |
+| Upload único / batch / status, validação + magic bytes | ✅ | `src/rag/rag-documents.*` |
+| Busca top 5 com `INNER JOIN` + `userId` + `READY` | ✅ | `src/rag/rag.service.ts` |
+| Auth `verifiedEmail` em todas as rotas RAG | ✅ | nível de classe nos dois controllers |
+| Integração com `POST /ai/chat` (contexto + histórico 20) | ✅ | `src/ai/ai.service.ts`; busca é best-effort |
+| `DocumentsModule` intocado | ✅ | |
+| `tsc` / `lint` nos arquivos do RAG | ✅ | sem erros/avisos em `src/rag/` e `src/ai/ai.service.ts` |
+| **Testes unitários do RAG** | ❌ | `chunker.spec.ts`, `rag.service.spec.ts`, `rag-documents.service.spec.ts` **não existem** |
+
+Desvios do plano (aceitáveis, documentados aqui):
+- Upload usa `multer({ dest })` em vez de `diskStorage` com `randomUUID()+ext`. O multer já gera um nome aleatório (hex, sem extensão), então não há path traversal; a extensão é lida de `filename`. Manter.
+- Magic bytes do PDF checa `%PDF` (4 bytes), não `%PDF-` (5). Suficiente.
+- `RagDocumentsService` encadeia o processamento numa promise global (não só "sem await").
+
+Fora do RAG, mas bloqueia o "done" da suíte completa: `src/auth/auth.controller.spec.ts` e `src/auth/auth.service.spec.ts` falham (9 testes) e têm erros de `tsc` (`googleSubject` / `undefined` no `User`). Não foram tocados; decidir separadamente.
+
+Problemas encontrados na revisão:
+1. **Query embedada com `taskType: "RETRIEVAL_DOCUMENT"`.** `search()` reusa `embed()`, então a pergunta usa o mesmo task type dos chunks. O correto para a query é `RETRIEVAL_QUERY` (mesmo modelo e dimensão — regra 8 continua valendo). Custo zero, melhora a busca.
+2. **A busca no chat pode travar por até minutos.** `search()` passa pelo `embedBatchWithRetry`: em 429 durante uma ingestão, o `POST /ai/chat` espera o `retryDelay` (~57s) até 5 vezes antes do fallback "sem contexto". O best-effort existe, mas só depois da espera.
+3. **HNSW + filtro pode devolver menos de 5 (ou 0) resultados.** O HNSW pega os ~40 vizinhos globais (`hnsw.ef_search` padrão) e só depois aplica `userId`/`conversationId`. Quando a tabela tiver muitos chunks de outros usuários, uma conversa com poucos documentos tende a voltar vazia. Não acontece hoje (volume baixo), acontece quando crescer.
+4. **Documento pode ficar `PROCESSING` para sempre** se o processo reiniciar no meio (a regra 5 só vale dentro do processo). O arquivo em `matias-rag/` também fica órfão.
 
 ## Decisões já tomadas (Q&A)
 
@@ -21,7 +51,7 @@ Este documento é o plano de implementação. Nada aqui foi implementado ainda.
 | Vector store | PGVector, coluna `vector` via Drizzle |
 | Modelo de embedding | `gemini-embedding-001`, **768 dimensões** |
 | Chunking | **Token-based** com `@google/genai` (`countTokens`) |
-| Chunk size / overlap | **512 tokens / 128 de overlap** |
+| Chunk size / overlap | **512 tokens / 64 de overlap** (era 128; ver Fase 2.2) |
 | Armazenamento dos chunks | Tabela separada `rag_chunks` ligada a `rag_documents` |
 | Resultado da busca | **Top 5 fixo** (sem paginação) |
 | Processamento | **Assíncrono** (upload retorna `documentId`; processa em background) |
@@ -440,6 +470,84 @@ Rodar: `npx vitest run <arquivo>`, `npm test`, `npm run lint`, `npx tsc --noEmit
 9. Wire do `RagModule` e testes dos serviços.
 10. Rodar suíte completa + lint + tsc.
 
+## Fase 2 — melhorias de velocidade (prioridade: velocidade > precisão)
+
+**Status (2026-11-05):** 2.1–2.6 implementados; 2.7 adiado (conforme abaixo). Problemas 1, 2 e 4 da revisão resolvidos; o 3 depende do 2.7. Testes da Fase 2 **ainda não escritos**.
+
+| Item | Onde |
+|---|---|
+| 2.1 Janela deslizante de 60s (90% da quota), compartilhada | `EmbeddingService.acquire()` / `record()` |
+| 2.2 Overlap 64 | `DEFAULT_OPTIONS` em `chunker.ts` (`estimateTokens` agora exportado) |
+| 2.3 Lotes até 100 textos / 8 000 tokens | `buildBatches()` em `embedding.service.ts` |
+| 2.4 `embedQuery` (`RETRIEVAL_QUERY`, 1 retry de 1s, não espera na janela); `hasReadyDocuments`; `Promise.all`; sem `similarity` no prompt; conversa recém-criada pula a busca | `embedding.service.ts`, `rag.service.ts`, `ai.service.ts` |
+| 2.5 Dedupe por conteúdo normalizado (descarta repetidos; `chunkIndex` mantém o índice original, pode ter lacunas) | `dedupeChunks()` em `rag.service.ts` |
+| 2.6 `onModuleInit`: `PROCESSING` com `updatedAt` > 15 min → `FAILED`; arquivos > 1h em `matias-rag/` não referenciados por `PROCESSING` são apagados | `RagDocumentsService`; pasta em `rag.constants.ts` |
+
+Limitação do 2.6: documento enviado < 15 min antes de um restart fica `PROCESSING` até o próximo boot. Aceito para não derrubar processamento de outra instância.
+
+No free tier, o tempo de ingestão é dominado pela quota de 30 000 tokens/min, não pela CPU nem pelo banco. Então ganhar velocidade = **esperar menos** e **mandar menos tokens**. Itens em ordem de prioridade (ganho ÷ esforço).
+
+### 2.1 Rate limiter por janela (token bucket) no lugar do sleep fixo — maior ganho
+Hoje, **depois de cada lote** o serviço dorme `tokensDoLote / 30k × 60s` (~10s por lote de 10×512), mesmo que nada tenha sido gasto no último minuto. Um DOCX de ~20k tokens (~27k com overlap) paga ~40s de espera sem precisar.
+
+- Trocar `pacingDelayMs` por um limitador de janela deslizante de 60s dentro do `EmbeddingService` (singleton): registra `(timestamp, tokens)` de cada chamada e só espera quando a soma da janela + o próximo lote passar de `EMBEDDING_TOKENS_PER_MINUTE`.
+- Documentos abaixo de ~30k tokens passam a ser processados **sem nenhuma espera**; documentos grandes ficam no mesmo teto de hoje.
+- O limitador é **compartilhado** por ingestão e busca, então a busca também conta na quota e não provoca 429 na ingestão.
+- Margem de segurança: usar 90% da quota (a estimativa de 4 chars/token pode errar para cima ou para baixo).
+- Sem dependência nova (~30 linhas).
+
+### 2.2 Reduzir o overlap de 128 → 64 tokens
+O overlap de 128/512 faz cada token do texto ser embedado ~1,33×. Com 64 cai para ~1,14× → **~14% menos tokens e ~14% menos tempo** em documentos grandes. A perda de precisão é pequena (frases cortadas na borda ainda aparecem em um dos dois chunks). `overlapTokens: 0` dá −25% se quisermos ir mais longe.
+- Mudar só o `DEFAULT_OPTIONS` do chunker; atualizar a tabela de decisões.
+
+### 2.3 Lotes maiores, limitados por tokens
+Com o limitador do 2.1, o `EMBEDDING_BATCH_SIZE = 10` deixa de proteger a quota e só gera mais requisições HTTP. Montar lotes até **100 textos** (limite por request da API) **ou** até um teto de tokens (ex.: 8 000), o que vier primeiro. Menos round-trips, mesmo consumo de quota.
+
+### 2.4 Busca do chat: falhar rápido e pular quando não há documentos
+O `POST /ai/chat` é o caminho que o usuário sente a cada mensagem.
+- **Query sem retry longo:** a busca usa um caminho do `EmbeddingService` com no máximo 1 tentativa extra de ~1s; em 429 cai direto para "sem contexto" (resolve o problema 2).
+- **Pular a busca** quando a conversa não tem documento `READY` (um `SELECT 1 ... LIMIT 1` em `rag_documents` pelo índice `user_id, conversation_id`). Economiza uma chamada de embedding (~200–500ms) por mensagem nas conversas sem arquivo, que devem ser a maioria.
+- **Paralelizar** histórico e busca com `Promise.all` (hoje são sequenciais).
+- **`taskType: "RETRIEVAL_QUERY"`** na query (resolve o problema 1).
+- Tirar `similarity` do texto enviado ao LLM: só gasta tokens de entrada.
+
+### 2.5 Pular chunks duplicados antes de embedar
+PDFs costumam repetir cabeçalho/rodapé/aviso em todas as páginas. Deduplicar por `content` normalizado (hash) dentro do documento antes do `embed()`. Ganho variável, custo de ~5 linhas.
+
+### 2.6 Recuperação no boot (confiabilidade, barato)
+Em `onModuleInit` do `RagModule`: marcar como `FAILED` (`error: "Interrupted by restart"`) os documentos `PROCESSING` com `updatedAt` mais antigo que ~15 min, e apagar arquivos de `matias-rag/` com mais de 1h. Resolve o problema 4 sem fila. O usuário reenvia o arquivo.
+
+### 2.7 HNSW com filtro (quando o volume crescer)
+Resolve o problema 3. A imagem `pgvector/pgvector:pg16` atual traz pgvector ≥ 0.8, que suporta busca iterativa:
+- Na transação da busca: `SET LOCAL hnsw.iterative_scan = relaxed_order;` (e, se preciso, `SET LOCAL hnsw.ef_search = 100`).
+- Alternativa mais simples enquanto o volume por usuário for pequeno: não usar o índice (scan exato sobre os chunks filtrados já é rápido com o índice em `user_id, conversation_id`).
+- Pode esperar; não afeta a velocidade hoje.
+
+### Opções maiores (só se o free tier continuar sendo o gargalo)
+- **Subir a quota** (plano pago) e ajustar `EMBEDDING_TOKENS_PER_MINUTE` — zero código; com 2.1 o ganho é imediato.
+- **Embedding local** (ex.: `multilingual-e5-small` via `@huggingface/transformers`, 384 dims): elimina quota e rede, mas muda dimensão (nova migration + re-embedding de tudo) e consome CPU do processo. Só faz sentido se a quota paga não for opção.
+- **Busca disponível durante o processamento:** inserir os chunks por lote e permitir busca em `PROCESSING`. O usuário pergunta antes do fim, com resultado parcial. Muda a regra do `status = READY`; deixar para depois.
+
+### O que não vale a pena agora
+- Tokenizer real (tiktoken etc.): mais precisão no tamanho do chunk, nenhum ganho de velocidade.
+- Fila (BullMQ/Redis): confiabilidade, não velocidade. Com 2.1 + 2.6, a fila em memória atende o volume atual.
+- Remover a serialização global de `processDocument`: com o limitador compartilhado (2.1) ela deixa de ser necessária para a quota, mas a quota continua sendo o teto, então paralelizar não acelera a ingestão no free tier. Manter.
+
+### Ordem sugerida
+1. Testes unitários do RAG que estão faltando (base para mexer no resto com segurança).
+2. 2.4 (query rápida + `RETRIEVAL_QUERY` + pular busca) — sentido em toda mensagem.
+3. 2.1 + 2.3 (limitador + lotes por token) — maior ganho na ingestão.
+4. 2.2 e 2.5 (menos tokens).
+5. 2.6 (recuperação no boot).
+6. 2.7 quando o volume justificar.
+
+Testes novos que a Fase 2 exige (com `vi.useFakeTimers()`):
+- `embedding.service.spec.ts`: sem espera abaixo da quota; espera quando a janela estoura; lote fecha em 100 textos ou no teto de tokens; busca não faz retry longo em 429.
+- `chunker.spec.ts`: overlap de ~64 tokens.
+- `rag.service.spec.ts`: chunks duplicados embedados uma vez; query usa `RETRIEVAL_QUERY`.
+- `ai.service.spec.ts`: não chama `search` quando a conversa não tem documento `READY`.
+- Recuperação no boot: `PROCESSING` antigo vira `FAILED`.
+
 ## Shortcuts (dívidas conhecidas)
 
 - `shortcut: processamento async em memória do processo, sem fila — jobs são perdidos se o processo reiniciar e não há retry automático; migrar para BullMQ/Redis quando houver volume ou exigência de confiabilidade.`
@@ -449,14 +557,16 @@ Rodar: `npx vitest run <arquivo>`, `npm test`, `npm run lint`, `npx tsc --noEmit
 
 ## Critérios de conclusão
 
-- [ ] `src/documents/` permanece intocado (`memeMax` intacto).
-- [ ] Upload de PDF e DOCX em `/rag/documents` retorna `documentId` e processa em background.
-- [ ] Batch aceita até 10 arquivos de 20 MB e isola falhas por arquivo.
-- [ ] Todas as rotas exigem usuário autenticado com e-mail confirmado (401/403 corretos).
-- [ ] Chunks de 512/128 tokens gravados com embedding de 768 dims.
-- [ ] `GET /rag/search` retorna até 5 chunks do usuário logado, com `similarity`.
-- [ ] `POST /ai/chat` usa os chunks da conversa + histórico, persiste USER/IA e funciona sem documentos.
-- [ ] Status do documento reflete `PROCESSING`/`READY`/`FAILED` e nunca fica preso.
-- [ ] Arquivos temporários são apagados em sucesso, falha e rejeição.
-- [ ] Testes unitários dos itens acima passam; lint e tsc limpos.
-- [ ] Nenhum dado de um usuário acessível por outro (busca sempre com `INNER JOIN rag_documents` + `userId` do `@CurrentUser()`).
+Marcados conforme revisão de código em 2026-11-05 (não houve teste manual nem automatizado do RAG).
+
+- [x] `src/documents/` permanece intocado (`memeMax` intacto).
+- [x] Upload de PDF e DOCX em `/rag/documents` retorna `documentId` e processa em background.
+- [x] Batch aceita até 10 arquivos de 20 MB e isola falhas por arquivo.
+- [x] Todas as rotas exigem usuário autenticado com e-mail confirmado (401/403 corretos).
+- [x] Chunks de 512/128 tokens gravados com embedding de 768 dims. *(Fase 2.2 propõe 512/64.)*
+- [x] `GET /rag/search` retorna até 5 chunks do usuário logado, com `similarity`. *(Ver problema 3 quando o volume crescer.)*
+- [x] `POST /ai/chat` usa os chunks da conversa + histórico, persiste USER/IA e funciona sem documentos.
+- [ ] Status do documento reflete `PROCESSING`/`READY`/`FAILED` e nunca fica preso. *(Dentro do processo sim; após restart não — Fase 2.6.)*
+- [x] Arquivos temporários são apagados em sucesso, falha e rejeição. *(Exceto se o processo morrer — Fase 2.6.)*
+- [ ] Testes unitários dos itens acima passam; lint e tsc limpos. *(Specs do RAG não existem; lint/tsc limpos no RAG; specs de `auth` quebrados.)*
+- [x] Nenhum dado de um usuário acessível por outro (busca sempre com `INNER JOIN rag_documents` + `userId` do `@CurrentUser()`).

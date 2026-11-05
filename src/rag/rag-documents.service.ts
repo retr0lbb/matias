@@ -3,12 +3,14 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  type OnModuleInit,
 } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, lt } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { open, unlink } from "node:fs/promises";
-import { extname } from "node:path";
+import { open, readdir, stat, unlink } from "node:fs/promises";
+import { extname, join } from "node:path";
+import { RAG_TEMP_DIR } from "./rag.constants.js";
 import { ragChunksTable } from "../db/schemas/rag-chunk.js";
 import {
   ragDocumentsTable,
@@ -22,6 +24,10 @@ const DOCX_MIME =
 const OCTET_STREAM = "application/octet-stream";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The processing queue lives in memory, so a restart orphans PROCESSING rows.
+// The cutoff avoids failing a document another instance is still working on.
+const STALE_PROCESSING_MS = 15 * 60 * 1000;
+const ORPHAN_FILE_MS = 60 * 60 * 1000;
 
 export interface UploadedRagDocument {
   documentId: string;
@@ -38,7 +44,7 @@ export interface RejectedRagDocument {
 }
 
 @Injectable()
-export class RagDocumentsService {
+export class RagDocumentsService implements OnModuleInit {
   private readonly logger = new Logger(RagDocumentsService.name);
   private processing: Promise<void> = Promise.resolve();
 
@@ -46,6 +52,59 @@ export class RagDocumentsService {
     @InjectDrizzle() private readonly db: NodePgDatabase,
     private readonly ragService: RagService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.recoverInterrupted();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`RAG boot recovery failed: ${message}`);
+    }
+  }
+
+  private async recoverInterrupted(): Promise<void> {
+    const now = Date.now();
+
+    const failed = await this.db
+      .update(ragDocumentsTable)
+      .set({ status: "FAILED", error: "Interrupted by restart" })
+      .where(
+        and(
+          eq(ragDocumentsTable.status, "PROCESSING"),
+          lt(ragDocumentsTable.updatedAt, new Date(now - STALE_PROCESSING_MS)),
+        ),
+      )
+      .returning({ id: ragDocumentsTable.id });
+
+    if (failed.length > 0) {
+      this.logger.warn(
+        `Marked ${failed.length} interrupted RAG document(s) as FAILED`,
+      );
+    }
+
+    // Never delete a file a still-PROCESSING document points to.
+    const inUse = new Set(
+      (
+        await this.db
+          .select({ storagePath: ragDocumentsTable.storagePath })
+          .from(ragDocumentsTable)
+          .where(eq(ragDocumentsTable.status, "PROCESSING"))
+      ).map((row) => row.storagePath),
+    );
+
+    const entries = await readdir(RAG_TEMP_DIR).catch(() => []);
+    for (const entry of entries) {
+      const path = join(RAG_TEMP_DIR, entry);
+      if (inUse.has(path)) {
+        continue;
+      }
+
+      const info = await stat(path).catch(() => undefined);
+      if (info?.isFile() && info.mtimeMs < now - ORPHAN_FILE_MS) {
+        await this.removeFile(path);
+      }
+    }
+  }
 
   async uploadOne(
     file: Express.Multer.File | undefined,

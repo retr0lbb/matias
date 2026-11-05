@@ -12,12 +12,10 @@ import {
 import { Authenticate, CurrentUser } from "@nestjs/authentication";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type User } from "../db/schemas/user.js";
 import { RagDocumentsService } from "./rag-documents.service.js";
+import { RAG_TEMP_DIR as TEMP_DIR } from "./rag.constants.js";
 
-const TEMP_DIR = join(tmpdir(), "matias-rag");
 mkdirSync(TEMP_DIR, { recursive: true });
 
 const SINGLE_MAX_BYTES = 200 * 1024 * 1024;

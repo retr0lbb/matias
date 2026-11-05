@@ -11,7 +11,10 @@ export interface TextChunk {
 
 const DEFAULT_OPTIONS: ChunkOptions = {
   maxTokens: 512,
-  overlapTokens: 128,
+  // 64 instead of 128: ~14% fewer embedded tokens, which on the free tier is
+  // ~14% less ingestion time. A sentence cut at a border still lands whole in
+  // one of the two neighbouring chunks.
+  overlapTokens: 64,
 };
 
 // Chunking is local-only. The previous implementation called the Gemini
@@ -67,7 +70,7 @@ export function chunkText(
   return chunks;
 }
 
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
