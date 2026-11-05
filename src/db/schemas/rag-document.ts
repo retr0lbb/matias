@@ -39,6 +39,7 @@ export const ragDocumentsTable = pgTable(
       tb.userId,
       tb.conversationId,
     ),
+    index("rag_documents_user_created_at_index").on(tb.userId, tb.createdAt),
   ],
 );
 

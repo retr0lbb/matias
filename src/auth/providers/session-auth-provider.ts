@@ -15,7 +15,7 @@ export class SessionAuth extends SessionCookieProvider<User>{
         registry.registerProvider(this)
     }
 
-    protected async validate(session: SessionRecord): Promise<{ id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; googleSubject: string | null; } | { id: string; name: string; email: string; emailVerified: boolean | null; passwordHash: string | null; loginProvider: "LOCAL" | "GOOGLE"; googleSubject: string | null;} | null | undefined> {
+    protected async validate(session: SessionRecord): Promise<User | undefined> {
         const [user] = await this.db.select().from(userTable).where(
             eq(userTable.id, session.userId)
         )

@@ -17,6 +17,7 @@ import {
   type RagDocument,
 } from "../db/schemas/rag-document.js";
 import { RagService } from "./rag.service.js";
+import { UsageService, type UsageSubject } from "../usage/usage.service.js";
 
 const PDF_MIME = "application/pdf";
 const DOCX_MIME =
@@ -51,6 +52,7 @@ export class RagDocumentsService implements OnModuleInit {
   constructor(
     @InjectDrizzle() private readonly db: NodePgDatabase,
     private readonly ragService: RagService,
+    private readonly usageService: UsageService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -108,7 +110,7 @@ export class RagDocumentsService implements OnModuleInit {
 
   async uploadOne(
     file: Express.Multer.File | undefined,
-    userId: string,
+    user: UsageSubject,
     conversationId?: string,
   ): Promise<UploadedRagDocument> {
     if (!file) {
@@ -125,18 +127,27 @@ export class RagDocumentsService implements OnModuleInit {
 
     let document: RagDocument;
     try {
-      [document] = await this.db
-        .insert(ragDocumentsTable)
-        .values({
-          userId,
-          conversationId: conversationId ?? null,
-          filename: file.originalname,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-          storagePath: file.path,
-          status: "PROCESSING",
-        })
-        .returning();
+      // Check and insert under one per-user lock so concurrent uploads
+      // cannot both take the last free slot.
+      document = await this.db.transaction(async (tx) => {
+        await this.usageService.lockUser(tx, user.id);
+        await this.usageService.assertCanUpload(tx, user, file.size);
+
+        const [inserted] = await tx
+          .insert(ragDocumentsTable)
+          .values({
+            userId: user.id,
+            conversationId: conversationId ?? null,
+            filename: file.originalname,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            storagePath: file.path,
+            status: "PROCESSING",
+          })
+          .returning();
+
+        return inserted;
+      });
     } catch (error) {
       await this.removeFile(file.path);
       throw error;
@@ -164,14 +175,14 @@ export class RagDocumentsService implements OnModuleInit {
 
   async uploadMany(
     files: Express.Multer.File[],
-    userId: string,
+    user: UsageSubject,
     conversationId?: string,
   ): Promise<{ documents: Array<UploadedRagDocument | RejectedRagDocument> }> {
     const documents: Array<UploadedRagDocument | RejectedRagDocument> = [];
 
     for (const file of files) {
       try {
-        documents.push(await this.uploadOne(file, userId, conversationId));
+        documents.push(await this.uploadOne(file, user, conversationId));
       } catch (error) {
         documents.push({
           documentId: null,

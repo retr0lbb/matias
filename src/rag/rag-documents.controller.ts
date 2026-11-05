@@ -15,10 +15,12 @@ import { mkdirSync } from "node:fs";
 import { type User } from "../db/schemas/user.js";
 import { RagDocumentsService } from "./rag-documents.service.js";
 import { RAG_TEMP_DIR as TEMP_DIR } from "./rag.constants.js";
+import { MAX_FILE_BYTES_ANY_PLAN } from "../usage/plans.js";
 
 mkdirSync(TEMP_DIR, { recursive: true });
 
-const SINGLE_MAX_BYTES = 200 * 1024 * 1024;
+// Hard ceiling for multer; the per-plan limit is enforced by UsageService.
+const SINGLE_MAX_BYTES = MAX_FILE_BYTES_ANY_PLAN;
 const BATCH_MAX_BYTES = 20 * 1024 * 1024;
 const BATCH_MAX_FILES = 10;
 
@@ -39,7 +41,7 @@ export class RagDocumentsController {
     @CurrentUser() user: User,
     @Body("conversationId") conversationId?: string,
   ) {
-    return this.documentsService.uploadOne(file, user.id, conversationId);
+    return this.documentsService.uploadOne(file, user, conversationId);
   }
 
   @Post("batch")
@@ -58,7 +60,7 @@ export class RagDocumentsController {
       throw new BadRequestException("At least one file is required");
     }
 
-    return this.documentsService.uploadMany(files, user.id, conversationId);
+    return this.documentsService.uploadMany(files, user, conversationId);
   }
 
   @Get(":id")

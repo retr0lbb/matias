@@ -5,8 +5,6 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-
-
 ### CHAT
 POST {{baseUrl}}/ai/chat?conversationId=1efd2089-496f-4da0-9963-ad723ed0b874
 Content-Type: application/json
@@ -57,21 +55,21 @@ GET http://localhost:3000/me
 
 ### UPLOAD ONE ITERATION OF DOCUMENT
 POST {{baseUrl}}/rag/documents
-Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
 Content-Type: multipart/form-data; boundary=MyBoundary
 
 --MyBoundary
-Content-Disposition: form-data; name="file"; filename="_big_pdf.pdf"
+Content-Disposition: form-data; name="file"; filename="_mem.pdf"
 Content-Type: application/pdf
 
-< ./_fla.pdf
+< ./_mem.pdf
 --MyBoundary--
 
 ### Get argument status
-GET {{baseUrl}}/rag/documents/8f656a83-6bb3-4061-a2f5-258163fc45ae
-Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
+GET {{baseUrl}}/rag/documents/7269d4a6-070d-4ef7-9706-7d3dff80e46f
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
 
 
 ### Retrieve argument
-GET {{baseUrl}}/rag/search?query=RFID%20FATEC
-Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
+GET {{baseUrl}}/rag/search?query=Disfarce
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8

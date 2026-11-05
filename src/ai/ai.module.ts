@@ -4,9 +4,10 @@ import { AiController } from './ai.controller.js';
 import { AiService } from './ai.service.js';
 import { AiExpensesFactory } from './ai.factory.js';
 import { RagModule } from '../rag/rag.module.js';
+import { UsageModule } from '../usage/usage.module.js';
 
 @Module({
-  imports: [ConfigModule, RagModule],
+  imports: [ConfigModule, RagModule, UsageModule],
   controllers: [AiController],
   providers: [AiService, AiExpensesFactory],
   exports: [AiService, AiExpensesFactory],

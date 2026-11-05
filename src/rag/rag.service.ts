@@ -14,7 +14,6 @@ import { EmbeddingService } from "./embedding.service.js";
 import { extractDocxText } from "./extractors/docx.extractor.js";
 import { extractPdfText } from "./extractors/pdf.extractor.js";
 
-// Each chunk row binds 6 parameters; 1000 rows keeps us well under the 65535 limit.
 const CHUNK_INSERT_BATCH_SIZE = 1000;
 const SEARCH_LIMIT = 5;
 

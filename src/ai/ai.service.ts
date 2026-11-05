@@ -7,6 +7,7 @@ import { desc, eq } from 'drizzle-orm';
 import { conversationsTable } from '../db/schemas/conversation.js';
 import { messagesTable } from '../db/schemas/message.js';
 import { RagService, type RagSearchResult } from '../rag/rag.service.js';
+import { UsageService } from '../usage/usage.service.js';
 
 const HISTORY_LIMIT = 20;
 const UUID_PATTERN =
@@ -20,6 +21,7 @@ export class AiService {
     private readonly aiFactory: AiExpensesFactory,
     @InjectDrizzle() private readonly db: NodePgDatabase,
     private readonly ragService: RagService,
+    private readonly usageService: UsageService,
   ) {}
 
   async chat(expense: AIExpense, prompt: string, loggedUser: string, conversationId?: string) {
@@ -32,6 +34,9 @@ export class AiService {
     if(!user){
       throw new UnauthorizedException("User not authenticated properly")
     }
+
+    // CHEAP is unlimited; NORMAL/EXPENSIVE count against the plan's quota.
+    await this.usageService.assertCanChat(user, expense)
 
     let conversation: {
       title: string | null;
@@ -110,6 +115,7 @@ export class AiService {
       inputTokens: message.usage.total_input_tokens,
       outputTokens: message.usage.total_tokens,
       interactionId: message.messageId,
+      expense,
     })
 
     return message.output_text
