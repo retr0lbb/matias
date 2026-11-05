@@ -12,6 +12,7 @@ import { AuthenticationModule, google } from '@nestjs/authentication';
 import { FileTemplateEngine, LogMailTransport, MailModule, SmtpTransport } from '@nestjs/mail';
 import { join } from 'node:path';
 import { DocumentsModule } from './documents/documents.module.js';
+import { UsageModule } from './usage/usage.module.js';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { DocumentsModule } from './documents/documents.module.js';
     AuthModule,
     SharedModule,
     DocumentsModule,
+    UsageModule,
   ],
 })
 export class AppModule {}

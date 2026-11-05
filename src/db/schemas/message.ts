@@ -13,6 +13,8 @@ import { conversationsTable } from "./conversation.js";
 
 export const roleEnum = pgEnum("roles", ["USER", "IA"])
 export const messageStatusEnum = pgEnum("message_status", ["FAILED", "COMPLETED", "ERROR"])
+// Mirrors AIExpense (src/ai/ai.factory.ts); used to count advanced-model usage.
+export const messageExpenseEnum = pgEnum("message_expense", ["CHEAP", "NORMAL", "EXPENSIVE"])
 
 export type MessageMetadata = {
     modelName: string,
@@ -31,7 +33,8 @@ export const messagesTable = pgTable("messages",
         inputTokens: integer("input_tokens").notNull().default(0),
         outputTokens: integer("output_tokens").notNull().default(0),
         interactionId: varchar("interaction_id"),
-        status: messageStatusEnum()
+        status: messageStatusEnum(),
+        expense: messageExpenseEnum()
     },
     (tb) => [
         index("conversationid_created_at_index").on(tb.conversationId, tb.createdAt)

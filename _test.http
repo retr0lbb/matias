@@ -5,16 +5,14 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-
-
 ### CHAT
-POST {{baseUrl}}/ai/chat?conversationId=dad8972f-0959-48cf-b0eb-277635ce790b
+POST {{baseUrl}}/ai/chat?conversationId=1efd2089-496f-4da0-9963-ad723ed0b874
 Content-Type: application/json
-Cookie: __Host-sid=ChQZML4HoCtltQqaS58CIIjJlk1jT5CKOYlU9Zb-fZ0
+Cookie: __Host-sid=pCfuq3C1ew5_jbP15bGdKD9gWcy-d1thzTZO9UMM1LI
 
 {
     "expense": "NORMAL",
-    "prompt": "What is the life purpose?"
+    "prompt": "The curriculum i have sent, what is the name of the person and what they do?"
 }
 
 ### REGISTER USER
@@ -54,6 +52,24 @@ Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
 ###
 GET http://localhost:3000/me
 
-###
 
-GET {{baseUrl}}/documents
+### UPLOAD ONE ITERATION OF DOCUMENT
+POST {{baseUrl}}/rag/documents
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+Content-Type: multipart/form-data; boundary=MyBoundary
+
+--MyBoundary
+Content-Disposition: form-data; name="file"; filename="_mem.pdf"
+Content-Type: application/pdf
+
+< ./_mem.pdf
+--MyBoundary--
+
+### Get argument status
+GET {{baseUrl}}/rag/documents/7269d4a6-070d-4ef7-9706-7d3dff80e46f
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+
+
+### Retrieve argument
+GET {{baseUrl}}/rag/search?query=Disfarce
+Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
