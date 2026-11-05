@@ -57,16 +57,21 @@ GET http://localhost:3000/me
 
 ### UPLOAD ONE ITERATION OF DOCUMENT
 POST {{baseUrl}}/rag/documents
-Cookie: __Host-sid=3GXb82enqXwp3W0G0HzGn5PaqN_jJeOWW1IZadjXHP8
+Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
 Content-Type: multipart/form-data; boundary=MyBoundary
 
 --MyBoundary
 Content-Disposition: form-data; name="file"; filename="_big_pdf.pdf"
 Content-Type: application/pdf
 
-< ./_big_pdf.pdf
+< ./_fla.pdf
 --MyBoundary--
 
-###
-GET {{baseUrl}}/rag/documents/9893bd0d-4915-4a36-b5c1-a3af3b6b10a6
-Cookie: __Host-sid=3GXb82enqXwp3W0G0HzGn5PaqN_jJeOWW1IZadjXHP8
+### Get argument status
+GET {{baseUrl}}/rag/documents/8f656a83-6bb3-4061-a2f5-258163fc45ae
+Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
+
+
+### Retrieve argument
+GET {{baseUrl}}/rag/search?query=RFID%20FATEC
+Cookie: __Host-sid=4AQRP4Xw_AkipNYjS08dPhtKgUx1oj8L3NM97xWqzfs
