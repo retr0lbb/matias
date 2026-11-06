@@ -1,5 +1,6 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import type { AIResponse, AiProvider } from "../ai-provider.type.js";
+import type { AIResponse, AIStreamChunk, AiProvider } from "../ai-provider.type.js";
+import { mapGeminiStream } from "./gemini-stream.js";
 
 // Troque aqui para rodar a matriz de testes
 const MODEL = "gemini-3.8-flash";
@@ -48,5 +49,24 @@ export class ExpensiveModel implements AiProvider {
 		} finally {
 			console.log("[GENERATE] elapsed", Math.round(performance.now() - t0), "ms");
 		}
+	}
+
+	async *generateStream(input: {
+		message: string;
+		signal?: AbortSignal;
+	}): AsyncGenerator<AIStreamChunk> {
+		const startedAt = new Date();
+
+		const stream = await this.client.models.generateContentStream({
+			model: MODEL,
+			contents: input.message,
+			config: {
+				maxOutputTokens: 2048 * 2,
+				thinkingConfig: { thinkingLevel: THINKING_LEVEL, includeThoughts: true },
+				abortSignal: input.signal,
+			},
+		});
+
+		yield* mapGeminiStream(stream, MODEL, startedAt);
 	}
 }
