@@ -5,14 +5,15 @@
 @pass = retr0lbb
 @name = Matita akinator
 
+@cookie = __Host-sid=n7IYRlNJ_dDhpbpwoy2bCn2LyWTQph88cjOq1OPwnFM
+
 ### CHAT
-POST {{baseUrl}}/ai/chat?conversationId=1efd2089-496f-4da0-9963-ad723ed0b874
+POST {{baseUrl}}/ai/chat
 Content-Type: application/json
-Cookie: __Host-sid=pCfuq3C1ew5_jbP15bGdKD9gWcy-d1thzTZO9UMM1LI
+Cookie: {{cookie}}
 
 {
-    "expense": "NORMAL",
-    "prompt": "The curriculum i have sent, what is the name of the person and what they do?"
+    "prompt": "Esta pergunta requer um modelo potente, Você é um professor universitario renomado, entretanto, voce atualmente esta dando aula em uma pre-escola, como explicar para criancas de 3 a 5 anos a massa do Boson de Higgs?"
 }
 
 ### REGISTER USER
@@ -26,6 +27,7 @@ Content-Type: application/json
 }
 
 ### LOGIN
+# @name login
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
@@ -42,7 +44,7 @@ POST http://localhost:3000/auth/email/verify
 Content-Type: application/json
 
 {
-    "token": "8OtTl7DbbmJBe_4EV5cYg_oTntRcI7UnDFccl4zkNp4"
+    "token": "EK4CNGppoX3W3uhiGNeAcvqANALEPCIudi8U8WFJKcs"
 }
 
 ### RESEND LINK
@@ -73,3 +75,8 @@ Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
 ### Retrieve argument
 GET {{baseUrl}}/rag/search?query=Disfarce
 Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+
+
+### QUTA
+GET {{baseUrl}}/usage
+Cookie: {{cookie}}

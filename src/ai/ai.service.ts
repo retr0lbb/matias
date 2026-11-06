@@ -1,13 +1,14 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { AiExpensesFactory, AIExpense } from './ai.factory.js';
 import { InjectDrizzle } from '@nestjs/drizzle';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { userTable } from '../db/schemas/user.js';
 import { desc, eq } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { conversationsTable } from '../db/schemas/conversation.js';
 import { messagesTable } from '../db/schemas/message.js';
-import { RagService, type RagSearchResult } from '../rag/rag.service.js';
+import { userTable } from '../db/schemas/user.js';
+import { RagSearchResult, RagService } from '../rag/rag.service.js';
 import { UsageService } from '../usage/usage.service.js';
+import { AIExpense, AiExpensesFactory } from './ai.factory.js';
+import { JudgeModel } from './models/judge-model.js';
 
 const HISTORY_LIMIT = 20;
 const UUID_PATTERN =
@@ -22,9 +23,11 @@ export class AiService {
     @InjectDrizzle() private readonly db: NodePgDatabase,
     private readonly ragService: RagService,
     private readonly usageService: UsageService,
+    private readonly judgeModel: JudgeModel
   ) {}
 
-  async chat(expense: AIExpense, prompt: string, loggedUser: string, conversationId?: string) {
+
+  async chat(prompt: string, loggedUser: string, conversationId?: string) {
     const [user] = await this.db.select()
       .from(userTable)
       .where(
@@ -34,9 +37,6 @@ export class AiService {
     if(!user){
       throw new UnauthorizedException("User not authenticated properly")
     }
-
-    // CHEAP is unlimited; NORMAL/EXPENSIVE count against the plan's quota.
-    await this.usageService.assertCanChat(user, expense)
 
     let conversation: {
       title: string | null;
@@ -81,21 +81,36 @@ export class AiService {
       conversation = newConversation
     }
 
-    // History and retrieval are independent; run them together.
-    // A conversation created just now cannot have documents yet.
-    const [history, chunks] = await Promise.all([
-      this.db.select({
+    const history = (
+      await this.db.select({
         role: messagesTable.role,
         content: messagesTable.content,
       })
         .from(messagesTable)
         .where(eq(messagesTable.conversationId, conversation.id))
         .orderBy(desc(messagesTable.createdAt))
-        .limit(HISTORY_LIMIT),
-      conversationId
-        ? this.retrieveContext(prompt, loggedUser, conversation.id)
-        : Promise.resolve([]),
-    ])
+        .limit(HISTORY_LIMIT)
+    ).reverse()
+
+    const judgeResponse = await this.judgeModel.classify(prompt, history)
+    
+    console.log("JUDGE RESPONSE =================")
+    console.log(judgeResponse)
+    
+    await this.usageService.assertCanChat(user, judgeResponse.model)
+
+    if (judgeResponse.title && !conversation.title) {
+      await this.db.update(conversationsTable)
+        .set({ title: judgeResponse.title })
+        .where(eq(conversationsTable.id, conversation.id))
+
+      conversation.title = judgeResponse.title
+    }
+
+    const chunks: RagSearchResult[] =
+      judgeResponse.retrieve && conversationId
+        ? await this.retrieveContext(prompt, loggedUser, conversation.id)
+        : []
 
     const input = buildRagPrompt(prompt, chunks, history.reverse())
 
@@ -105,7 +120,7 @@ export class AiService {
       content: prompt
     })
 
-    const provider = this.aiFactory.create(expense);
+    const provider = this.aiFactory.create(judgeResponse.model as AIExpense);
     const message = await provider.generate({ message: input });
 
     await this.db.insert(messagesTable).values({
@@ -115,15 +130,12 @@ export class AiService {
       inputTokens: message.usage.total_input_tokens,
       outputTokens: message.usage.total_tokens,
       interactionId: message.messageId,
-      expense,
+      expense: judgeResponse.model,
     })
 
     return message.output_text
   }
 
-  // Retrieval is best-effort: an embedding failure (e.g. quota) should not
-  // take down the chat. Conversations without READY documents skip the query
-  // embedding call entirely.
   private async retrieveContext(
     prompt: string,
     userId: string,

@@ -1,32 +1,52 @@
-import { GoogleGenAI } from "@google/genai";
-import { AiProvider, AIResponse } from "../ai-provider.type.js";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import type { AIResponse, AiProvider } from "../ai-provider.type.js";
 
-export class ExpensiveModel implements AiProvider{
-    private readonly client: GoogleGenAI
+// Troque aqui para rodar a matriz de testes
+const MODEL = "gemini-3.8-flash";
+const THINKING_LEVEL = ThinkingLevel.LOW;
 
-    constructor(apiKey: string){
-        this.client = new GoogleGenAI({
-            apiKey: apiKey,
-        })
-    }
+export class ExpensiveModel implements AiProvider {
+	private readonly client: GoogleGenAI;
 
-    async generate(input: { message: string; }): Promise<AIResponse> {
-        const interaction = await this.client.interactions.create({
-            model: "gemini-3.8-flash",
-            input: input.message
-        })
+	constructor(apiKey: string) {
+		this.client = new GoogleGenAI({
+			apiKey: apiKey,
+			httpOptions: { timeout: 90_000 },
+		});
+	}
 
-        return {
-            messageId: interaction.id,
-            model: interaction.model ?? "gemini-3.1-flash-lite",
-            status: interaction.status,
-            created: interaction.created ?? "",
-            output_text: interaction.output_text ?? "",
-            updated: interaction.updated ?? "",
-            usage: {
-                total_input_tokens: interaction.usage?.total_input_tokens ?? 0,
-                total_tokens: interaction.usage?.total_tokens ?? 0
-            }
-        }
-    }
+	async generate(input: { message: string }): Promise<AIResponse> {
+		const startedAt = new Date();
+		const t0 = performance.now();
+
+		try {
+			const response = await this.client.models.generateContent({
+				model: MODEL,
+				contents: input.message,
+				config: {
+					maxOutputTokens: 2048 * 2,
+					thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+				},
+			});
+
+			const usage = response.usageMetadata;
+			return {
+				messageId: response.responseId ?? "",
+				model: response.modelVersion ?? MODEL,
+				status: response.candidates?.[0]?.finishReason ?? "UNKNOWN",
+				created: startedAt.toISOString(),
+				updated: new Date().toISOString(),
+				output_text: response.text ?? "",
+				usage: {
+					total_input_tokens: usage?.promptTokenCount ?? 0,
+					total_tokens: usage?.totalTokenCount ?? 0,
+				},
+			};
+		} catch (error) {
+			console.log(error);
+			throw error;
+		} finally {
+			console.log("[GENERATE] elapsed", Math.round(performance.now() - t0), "ms");
+		}
+	}
 }
