@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UploadedFile,
   UploadedFiles,
   UseInterceptors,
@@ -39,8 +40,11 @@ export class RagDocumentsController {
   upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: User,
-    @Body("conversationId") conversationId?: string,
+    @Query("conversationId") queryConversationId?: string,
+    @Body("conversationId") bodyConversationId?: string,
   ) {
+    const conversationId =
+      queryConversationId || bodyConversationId || undefined;
     return this.documentsService.uploadOne(file, user, conversationId);
   }
 
@@ -54,8 +58,11 @@ export class RagDocumentsController {
   uploadMany(
     @UploadedFiles() files: Express.Multer.File[] | undefined,
     @CurrentUser() user: User,
-    @Body("conversationId") conversationId?: string,
+    @Query("conversationId") queryConversationId?: string,
+    @Body("conversationId") bodyConversationId?: string,
   ) {
+    const conversationId =
+      queryConversationId || bodyConversationId || undefined;
     if (!files || files.length === 0) {
       throw new BadRequestException("At least one file is required");
     }
