@@ -5,15 +5,15 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=n7IYRlNJ_dDhpbpwoy2bCn2LyWTQph88cjOq1OPwnFM
+@cookie = __Host-sid=sWJsYFO2cSou9Fz8aq8fUZ5QN7lo32ugYP_dAjYr39c
 
 ### CHAT
-POST {{baseUrl}}/ai/chat
+POST {{baseUrl}}/ai/chat?conversationId=4428c214-2752-4f79-968d-dfbb1d2d7eec
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
-    "prompt": "Esta pergunta requer um modelo potente, Você é um professor universitario renomado, entretanto, voce atualmente esta dando aula em uma pre-escola, como explicar para criancas de 3 a 5 anos a massa do Boson de Higgs?"
+    "prompt": "qual o meu nome?"
 }
 
 ### REGISTER USER
@@ -53,28 +53,29 @@ Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
 
 ###
 GET http://localhost:3000/me
+Cookie: {{cookie}}
 
 
 ### UPLOAD ONE ITERATION OF DOCUMENT
 POST {{baseUrl}}/rag/documents
-Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+Cookie: {{cookie}}
 Content-Type: multipart/form-data; boundary=MyBoundary
 
 --MyBoundary
-Content-Disposition: form-data; name="file"; filename="_mem.pdf"
+Content-Disposition: form-data; name="file"; filename="sam.pdf"
 Content-Type: application/pdf
 
-< ./_mem.pdf
+< ./sam.pdf
 --MyBoundary--
 
 ### Get argument status
-GET {{baseUrl}}/rag/documents/7269d4a6-070d-4ef7-9706-7d3dff80e46f
-Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+GET {{baseUrl}}/rag/documents/30844414-c414-44e7-9d57-751ecf9acb91
+Cookie: {{cookie}}
 
 
 ### Retrieve argument
-GET {{baseUrl}}/rag/search?query=Disfarce
-Cookie: __Host-sid=1bIW5z1xmb3y0_GNpWJuNiO1CaMmLjPuBq3h0DIQXn8
+GET {{baseUrl}}/rag/search?query=Fatecard
+Cookie: {{cookie}}
 
 
 ### QUTA

@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import type { AiProvider } from "./ai-provider.type.js";
 import { CheapModel } from "./models/cheap.model.js";
 import { ExpensiveModel } from "./models/expensive.model.js";
+import { NormalModel } from "./models/normal.model.js";
 
 export enum AIExpense {
 	CHEAP = "CHEAP",
@@ -23,7 +24,7 @@ export class AiExpensesFactory {
 				return new ExpensiveModel(this.configService.getOrThrow<string>("GEMINI_API_KEY"));
 			}
 			case AIExpense.NORMAL: {
-				return new CheapModel(this.configService.getOrThrow<string>("GEMINI_API_KEY"));
+				return new NormalModel(this.configService.getOrThrow<string>("GEMINI_API_KEY"));
 			}
 			default: {
 				throw new Error("Model not found (FROM ME)");

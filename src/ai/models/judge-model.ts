@@ -65,7 +65,7 @@ export class JudgeModel {
 						properties: {
 							model: {
 								type: "string",
-								enum: ["CHEAP", "EXPENSIVE"],
+								enum: ["CHEAP", "NORMAL", "EXPENSIVE"],
 							},
 							retrieve: {
 								type: "boolean",
