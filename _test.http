@@ -5,15 +5,15 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=sWJsYFO2cSou9Fz8aq8fUZ5QN7lo32ugYP_dAjYr39c
+@cookie = __Host-sid=cUPjdRwJ4qylsovbqzArmcUKTDSTISAv16NYLR93-UY
 
 ### CHAT
-POST {{baseUrl}}/ai/chat?conversationId=4428c214-2752-4f79-968d-dfbb1d2d7eec
+POST {{baseUrl}}/ai/chat?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
-    "prompt": "qual o meu nome?"
+    "prompt": "Qual documento que foi enviado em anexo nesse chat? (CHEAP MODEL)"
 }
 
 ### REGISTER USER
@@ -57,19 +57,19 @@ Cookie: {{cookie}}
 
 
 ### UPLOAD ONE ITERATION OF DOCUMENT
-POST {{baseUrl}}/rag/documents
+POST {{baseUrl}}/rag/documents?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
 Cookie: {{cookie}}
 Content-Type: multipart/form-data; boundary=MyBoundary
 
 --MyBoundary
-Content-Disposition: form-data; name="file"; filename="sam.pdf"
-Content-Type: application/pdf
+Content-Disposition: form-data; name="file"; filename="prot.docx"
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
 
-< ./sam.pdf
+< ./prot.docx
 --MyBoundary--
 
-### Get argument status
-GET {{baseUrl}}/rag/documents/30844414-c414-44e7-9d57-751ecf9acb91
+### Get Document upload status
+GET {{baseUrl}}/rag/documents/29329aa6-7c2f-4460-8445-246ac67a9d05
 Cookie: {{cookie}}
 
 

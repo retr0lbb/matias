@@ -66,3 +66,6 @@ _small_pdf.pdf
 _fla.pdf
 _dnd_book.pdf
 _mem.pdf
+
+*.pdf
+*.docx

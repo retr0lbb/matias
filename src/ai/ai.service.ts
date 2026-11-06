@@ -112,7 +112,7 @@ export class AiService {
         ? await this.retrieveContext(prompt, loggedUser, conversation.id)
         : []
 
-    const input = buildRagPrompt(prompt, chunks, history.reverse())
+    const input = buildRagPrompt(prompt, chunks, history)
 
     await this.db.insert(messagesTable).values({
       conversationId: conversation.id,
@@ -121,6 +121,8 @@ export class AiService {
     })
 
     const provider = this.aiFactory.create(judgeResponse.model as AIExpense);
+
+    this.logger.log(`[RAG] retrieve=${judgeResponse.retrieve} conversationId=${conversationId}`)
     const message = await provider.generate({ message: input });
 
     await this.db.insert(messagesTable).values({
@@ -136,20 +138,17 @@ export class AiService {
     return message.output_text
   }
 
-  private async retrieveContext(
-    prompt: string,
-    userId: string,
-    conversationId: string,
-  ): Promise<RagSearchResult[]> {
+  private async retrieveContext(prompt: string, userId: string, conversationId: string) {
     try {
-      if (!(await this.ragService.hasReadyDocuments(userId, conversationId))) {
-        return []
-      }
+      const ready = await this.ragService.hasReadyDocuments(userId, conversationId)
+      this.logger.log(`[RAG] conversation=${conversationId} ready=${ready}`)
+      if (!ready) return []
 
-      return await this.ragService.search(prompt, userId, { conversationId })
+      const results = await this.ragService.search(prompt, userId, { conversationId })
+      this.logger.log(`[RAG] results=${results.length}`)
+      return results
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.logger.warn(`RAG search failed, answering without context: ${message}`)
+      this.logger.error("[RAG] search failed", error)
       return []
     }
   }
