@@ -4,7 +4,8 @@ export type QuotaCode =
   | "UPLOADS_PER_CYCLE"
   | "FILE_TOO_LARGE"
   | "STORAGE"
-  | "ADVANCED_MESSAGES";
+  | "ADVANCED_MESSAGES"
+  | "ASSESSMENTS_PER_CYCLE";
 
 export interface QuotaExceededDetails {
   code: QuotaCode;

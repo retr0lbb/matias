@@ -92,3 +92,43 @@ Cookie: {{cookie}}
 ### QUTA
 GET {{baseUrl}}/usage
 Cookie: {{cookie}}
+
+
+### ASSESSMENT: generate (header and theme are optional)
+# @name assessment
+POST {{baseUrl}}/documents/assessments
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "prompt": "Prova de Ciências para o 6º ano sobre o sistema solar: 4 questões objetivas de 1 ponto e 2 dissertativas de 3 pontos.",
+    "header": {
+        "institutionName": "Escola Exemplo",
+        "teacherName": "Prof. Exemplo",
+        "subject": "Ciências"
+    },
+    "theme": {
+        "accentColor": "#1d4ed8"
+    }
+}
+
+### ASSESSMENT: stored JSON
+@assessmentId = {{assessment.response.body.id}}
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}
+Cookie: {{cookie}}
+
+### ASSESSMENT: HTML preview
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/preview
+Cookie: {{cookie}}
+
+### ASSESSMENT: PDF
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
+Cookie: {{cookie}}
+
+### ASSESSMENT: answer key PDF
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
+Cookie: {{cookie}}
+
+### ASSESSMENT: answer key HTML preview
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
+Cookie: {{cookie}}

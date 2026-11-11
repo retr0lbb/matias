@@ -4,6 +4,7 @@ import { and, count, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
 import { messageExpenseEnum, messagesTable } from "../db/schemas/message.js";
+import { assessmentsTable } from "../db/schemas/assessment.js";
 import { ragDocumentsTable } from "../db/schemas/rag-document.js";
 import type { Plan, User } from "../db/schemas/user.js";
 import { getCurrentCycle, type BillingCycle } from "./billing-cycle.js";
@@ -28,6 +29,7 @@ export interface UsageSummary {
   storage: { usedBytes: number; limitBytes: number | null };
   maxFileBytes: number;
   advancedMessages: { used: number; limit: number | null };
+  assessments: { used: number; limit: number | null };
 }
 
 @Injectable()
@@ -38,9 +40,10 @@ export class UsageService {
     const limits = PLAN_LIMITS[user.plan];
     const cycle = this.cycleFor(user);
 
-    const [documents, advancedMessages] = await Promise.all([
+    const [documents, advancedMessages, assessments] = await Promise.all([
       this.countDocuments(this.db, user.id, cycle),
       this.countAdvancedMessages(user.id, cycle),
+      this.countAssessments(this.db, user.id, cycle),
     ]);
 
     return {
@@ -59,6 +62,7 @@ export class UsageService {
         used: advancedMessages,
         limit: limits.advancedMessagesPerCycle,
       },
+      assessments: { used: assessments, limit: limits.assessmentsPerCycle },
     };
   }
 
@@ -151,6 +155,29 @@ export class UsageService {
     }
   }
 
+  async assertCanCreateAssessment(
+    executor: DbExecutor,
+    user: UsageSubject,
+  ): Promise<void> {
+    const limit = PLAN_LIMITS[user.plan].assessmentsPerCycle;
+    if (limit === null) {
+      return;
+    }
+
+    const cycle = this.cycleFor(user);
+    const used = await this.countAssessments(executor, user.id, cycle);
+
+    if (used >= limit) {
+      throw new QuotaExceededException({
+        code: "ASSESSMENTS_PER_CYCLE",
+        message: `You've created all ${limit} assessments for this month. Your limit resets on ${formatDay(cycle.resetsAt)}.`,
+        limit,
+        used,
+        resetsAt: cycle.resetsAt,
+      });
+    }
+  }
+
   private cycleFor(user: UsageSubject): BillingCycle {
     return getCurrentCycle(user.cycleAnchorAt, new Date());
   }
@@ -178,6 +205,24 @@ export class UsageService {
       uploads: row?.uploads ?? 0,
       storageBytes: row?.storageBytes ?? 0,
     };
+  }
+
+  private async countAssessments(
+    executor: DbExecutor,
+    userId: string,
+    cycle: BillingCycle,
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ used: count() })
+      .from(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.userId, userId),
+          gte(assessmentsTable.createdAt, cycle.start),
+        ),
+      );
+
+    return row?.used ?? 0;
   }
 
   private async countAdvancedMessages(
