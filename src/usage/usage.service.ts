@@ -43,7 +43,7 @@ export class UsageService {
     const [documents, advancedMessages, assessments] = await Promise.all([
       this.countDocuments(this.db, user.id, cycle),
       this.countAdvancedMessages(user.id, cycle),
-      this.countAssessments(this.db, user.id, cycle),
+      this.countAssessments(this.db, user, cycle),
     ]);
 
     return {
@@ -165,12 +165,47 @@ export class UsageService {
     }
 
     const cycle = this.cycleFor(user);
-    const used = await this.countAssessments(executor, user.id, cycle);
+    const used = await this.countAssessments(executor, user, cycle);
 
     if (used >= limit) {
       throw new QuotaExceededException({
         code: "ASSESSMENTS_PER_CYCLE",
         message: `You've created all ${limit} assessments for this month. Your limit resets on ${formatDay(cycle.resetsAt)}.`,
+        limit,
+        used,
+        resetsAt: cycle.resetsAt,
+      });
+    }
+  }
+
+  /**
+   * `aiRevisions` is how many AI changes the assessment already has. The next
+   * one is free while it fits in the current block; the first change of a new
+   * block needs a free assessment credit.
+   */
+  async assertCanReviseAssessment(
+    executor: DbExecutor,
+    user: UsageSubject,
+    aiRevisions: number,
+  ): Promise<void> {
+    const limits = PLAN_LIMITS[user.plan];
+    const perCredit = limits.aiRevisionsPerAssessmentCredit;
+    const limit = limits.assessmentsPerCycle;
+
+    if (perCredit === null || limit === null) {
+      return;
+    }
+    if (aiRevisions === 0 || aiRevisions % perCredit !== 0) {
+      return;
+    }
+
+    const cycle = this.cycleFor(user);
+    const used = await this.countAssessments(executor, user, cycle);
+
+    if (used >= limit) {
+      throw new QuotaExceededException({
+        code: "ASSESSMENTS_PER_CYCLE",
+        message: `This assessment has used its ${aiRevisions} included AI changes. More changes use one of your monthly assessments, and you've used all ${limit}. Your limit resets on ${formatDay(cycle.resetsAt)}.`,
         limit,
         used,
         resetsAt: cycle.resetsAt,
@@ -207,17 +242,25 @@ export class UsageService {
     };
   }
 
+  // Credits used by assessments created in this cycle: one for the generation
+  // plus one for every extra block of AI changes on the same assessment.
   private async countAssessments(
     executor: DbExecutor,
-    userId: string,
+    user: UsageSubject,
     cycle: BillingCycle,
   ): Promise<number> {
+    const perCredit = PLAN_LIMITS[user.plan].aiRevisionsPerAssessmentCredit;
+    const credits =
+      perCredit === null
+        ? sql<number>`count(*)`
+        : sql<number>`coalesce(sum(1 + greatest(ceil(${assessmentsTable.aiRevisions}::numeric / ${perCredit}::numeric) - 1, 0)), 0)`;
+
     const [row] = await executor
-      .select({ used: count() })
+      .select({ used: credits.mapWith(Number) })
       .from(assessmentsTable)
       .where(
         and(
-          eq(assessmentsTable.userId, userId),
+          eq(assessmentsTable.userId, user.id),
           gte(assessmentsTable.createdAt, cycle.start),
         ),
       );

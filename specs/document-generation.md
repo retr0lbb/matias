@@ -254,4 +254,47 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 
 ---
 
+## 7. Estado atual, mudanças e pendências (11/11/2026)
+
+### Estado
+
+- **Feitas:** Fases 0, 1, 2 e 3 (commitadas) e Fase 4 (patch, ainda sem commit).
+- **Pendentes:** Fase 5 (DOCX) e Fase 6 (teste de fluxo ponta a ponta).
+- **Próximo trabalho:** generalização para blocos e tipos de documento, descrita em [`document-blocks.md`](document-blocks.md). Ela renomeia rotas, tabela, campos do JSON e operações de patch citados neste arquivo.
+
+### Mudanças em relação ao plano
+
+- A rota de debug `GET /documents` e o `documents.controller.ts` foram removidos.
+- `POST /documents/assessments` também aceita `header` e `theme` opcionais, porque não existe outra forma de informar escola e professor.
+- `GET /:id/answer-key` devolve o gabarito em PDF; existe também `GET /:id/answer-key/preview` (HTML).
+- A tabela ganhou as colunas `prompt` (pedido que gerou o conteúdo) e `ai_revisions` (mudanças feitas pela IA). `regenerate` usa o `prompt` salvo ou um novo enviado no corpo.
+- Documento de outro usuário responde 404 (mesma resposta de "não existe"), não 403.
+- `revise` não usa `responseJsonSchema`: pede JSON puro com o schema (gerado do Zod) dentro das instruções. O Zod e o `applyPatch` continuam validando. A geração segue usando o schema automático.
+- A IA pode devolver `ops` vazio quando o pedido é impossível (ex.: trocar a logo); a resposta é 422.
+- Modelo usado: `gemini-3.5-flash`.
+- Cota: 30 créditos por ciclo nos dois planos. Cada documento inclui 7 mudanças por IA (`revise` ou `regenerate`); a 8ª consome mais um crédito e cobre da 8ª à 14ª, e assim por diante. Patch manual não consome nada.
+- As Fases 1 a 4 não têm specs unitários (os testes ficaram com o autor do repositório). Só existe o e2e do Chromium (`pdf-renderer.e2e-spec.ts`).
+- `specs/document-builder.md` foi removido.
+
+### A investigar
+
+1. **Gemini responde 400 (`INVALID_ARGUMENT`) ao schema de patch em `responseJsonSchema`.** O que já se sabe:
+   - a união com uma única operação (`set_title`) é aceita;
+   - a união com quatro operações simples (`set_title`, `update_section`, `remove_section`, `remove_question`) é recusada;
+   - não resolveu: trocar `type: ["string","null"]` por `anyOf`, remover o `null`, tirar as operações de tema/cabeçalho, tirar as operações com questão aninhada;
+   - não chegou a ser testado: trocar `oneOf` por `anyOf` na união de operações, e a união com duas operações;
+   - a união de dois tipos de questão usada na geração funciona.
+2. **`revise` nunca rodou contra o modelo real.** Foi verificado só com o cliente do Gemini simulado (retry, 422, 409, cota). Falta confirmar que o modelo devolve patches válidos em modo JSON.
+3. **Limites da chave gratuita:** 20 requisições por dia por modelo (a cota de `gemini-3.5-flash` é compartilhada com o chat CHEAP). `gemini-3.8-flash` devolveu 503/504 em todas as chamadas.
+4. **Brecha na cota:** os créditos são contados sobre documentos criados no ciclo atual, então mudanças extras em um documento de ciclo anterior não são cobradas. Fechar isso exige uma tabela de lançamentos de uso.
+5. **Regra dos 7:** confirmar se "passou de 7 conta como −1 documento" é um crédito por bloco extra de 7 (como está) ou um crédito por mudança extra. É uma constante em `src/usage/plans.ts`.
+6. **Tamanho da logo:** o limite padrão de JSON do Express é 100 KB, mas o schema aceita logo de até 300 mil caracteres; acima de ~100 KB a requisição é recusada com 413 até o limite ser aumentado em `main.ts`.
+7. **`ZodValidationPipe` responde só "Validation failed"**, sem dizer qual campo. Para o `PATCH` manual isso dificulta o uso pelo front.
+8. **Tokens gastos pela IA em documentos não são registrados** em lugar nenhum (as mensagens do chat registram).
+9. **`POST /auth/register` devolve o `passwordHash`** na resposta.
+10. **Specs de `auth` quebrados:** 3 erros de `tsc` e testes falhando; por isso `npm test` não é rodado.
+11. **`_test.http`:** a conta e o cookie do arquivo não existem no banco local.
+
+---
+
 Posso começar pela Fase 0?

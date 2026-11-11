@@ -1,30 +1,35 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectDrizzle } from '@nestjs/drizzle';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
-  assessmentsTable,
   type Assessment,
+  assessmentsTable,
 } from '../../db/schemas/assessment.js';
 import { conversationsTable } from '../../db/schemas/conversation.js';
 import { UsageService, type UsageSubject } from '../../usage/usage.service.js';
 import { AssessmentAiService } from './ai/assessment-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
+import { applyPatch } from './patch/apply-patch.js';
 import { PdfRendererService } from './pdf/pdf-renderer.service.js';
 import { renderAnswerKey } from './render/render-answer-key.js';
 import { renderAssessmentHtml } from './render/render-html.js';
 import {
   ASSESSMENT_SCHEMA_VERSION,
-  assessmentDocumentSchema,
   type AssessmentDocument,
+  assessmentDocumentSchema,
 } from './schemas/document.schema.js';
 import type { AssessmentHeader } from './schemas/header.schema.js';
+import type { AssessmentPatch } from './schemas/patch.schema.js';
 import type { AssessmentTheme } from './schemas/theme.schema.js';
 
 export interface GenerateAssessmentInput {
@@ -34,10 +39,29 @@ export interface GenerateAssessmentInput {
   theme?: AssessmentTheme;
 }
 
+export interface PatchAssessmentInput {
+  version: number;
+  ops: AssessmentPatch;
+}
+
+export interface ReviseAssessmentInput {
+  version: number;
+  instruction: string;
+}
+
+export interface RegenerateAssessmentInput {
+  version: number;
+  /** Falls back to the request the assessment was last generated from. */
+  prompt?: string;
+}
+
 export interface AssessmentView {
   id: string;
   conversationId: string | null;
+  /** Send it back with every change; a stale value is answered with 409. */
   version: number;
+  prompt: string | null;
+  aiRevisions: number;
   document: AssessmentDocument;
   createdAt: Date;
   updatedAt: Date;
@@ -49,7 +73,7 @@ export interface RenderedPdf {
 }
 
 const FALLBACK_FILENAME = 'avaliacao';
-const COMBINING_MARKS = /[̀-ͯ]/g;
+const COMBINING_MARKS = /\p{M}/gu;
 
 /** ASCII-only name, safe to put in a Content-Disposition header. */
 function toFilename(title: string): string {
@@ -102,6 +126,7 @@ export class AssessmentsService {
           userId: user.id,
           conversationId: input.conversationId ?? null,
           document,
+          prompt: input.prompt,
         })
         .returning();
 
@@ -133,6 +158,90 @@ export class AssessmentsService {
     }
 
     return this.toView(row, parsed.data);
+  }
+
+  /** Manual change: no AI, no quota. */
+  async patch(
+    id: string,
+    userId: string,
+    input: PatchAssessmentInput,
+  ): Promise<AssessmentView> {
+    const current = await this.get(id, userId);
+    this.assertVersion(current, input.version);
+
+    const result = applyPatch(current.document, input.ops);
+    if (!result.success) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'Unprocessable Entity',
+        message: 'The patch could not be applied',
+        errors: result.errors,
+      });
+    }
+
+    const [row] = await this.db
+      .update(assessmentsTable)
+      .set({ document: result.document, version: current.version + 1 })
+      .where(this.atVersion(current, userId))
+      .returning();
+
+    if (!row) {
+      throw this.versionConflict();
+    }
+
+    return this.toView(row, result.document);
+  }
+
+  /** The AI turns the instruction into a patch; same engine as `patch`. */
+  async revise(
+    id: string,
+    user: UsageSubject,
+    input: ReviseAssessmentInput,
+  ): Promise<AssessmentView> {
+    const current = await this.get(id, user.id);
+    this.assertVersion(current, input.version);
+    await this.usageService.assertCanReviseAssessment(
+      this.db,
+      user,
+      current.aiRevisions,
+    );
+
+    const document = await this.assessmentAi.revise(
+      current.document,
+      input.instruction,
+    );
+
+    return this.saveAiRevision(current, user, { document });
+  }
+
+  /** New content from the prompt; header and theme are kept. */
+  async regenerate(
+    id: string,
+    user: UsageSubject,
+    input: RegenerateAssessmentInput,
+  ): Promise<AssessmentView> {
+    const current = await this.get(id, user.id);
+    this.assertVersion(current, input.version);
+
+    const prompt = input.prompt ?? current.prompt;
+    if (!prompt) {
+      throw new BadRequestException('A prompt is required');
+    }
+
+    await this.usageService.assertCanReviseAssessment(
+      this.db,
+      user,
+      current.aiRevisions,
+    );
+
+    const generated = await this.assessmentAi.generate(prompt);
+
+    const document = assessmentDocumentSchema.parse({
+      ...current.document,
+      content: assignIds(generated),
+    });
+
+    return this.saveAiRevision(current, user, { document, prompt });
   }
 
   async renderPreview(id: string, userId: string): Promise<string> {
@@ -193,11 +302,68 @@ export class AssessmentsService {
     }
   }
 
+  // Quota is re-checked under the per-user lock, and the write only lands if
+  // nobody changed the assessment while the AI was working.
+  private async saveAiRevision(
+    current: AssessmentView,
+    user: UsageSubject,
+    changes: { document: AssessmentDocument; prompt?: string },
+  ): Promise<AssessmentView> {
+    const row = await this.db.transaction(async (tx) => {
+      await this.usageService.lockUser(tx, user.id);
+      await this.usageService.assertCanReviseAssessment(
+        tx,
+        user,
+        current.aiRevisions,
+      );
+
+      const [updated] = await tx
+        .update(assessmentsTable)
+        .set({
+          ...changes,
+          version: current.version + 1,
+          aiRevisions: sql`${assessmentsTable.aiRevisions} + 1`,
+        })
+        .where(this.atVersion(current, user.id))
+        .returning();
+
+      return updated;
+    });
+
+    if (!row) {
+      throw this.versionConflict();
+    }
+
+    return this.toView(row, changes.document);
+  }
+
+  private atVersion(current: AssessmentView, userId: string) {
+    return and(
+      eq(assessmentsTable.id, current.id),
+      eq(assessmentsTable.userId, userId),
+      eq(assessmentsTable.version, current.version),
+    );
+  }
+
+  private assertVersion(current: AssessmentView, version: number): void {
+    if (current.version !== version) {
+      throw this.versionConflict();
+    }
+  }
+
+  private versionConflict(): ConflictException {
+    return new ConflictException(
+      'The assessment changed since it was loaded; reload it and try again',
+    );
+  }
+
   private toView(row: Assessment, document: AssessmentDocument): AssessmentView {
     return {
       id: row.id,
       conversationId: row.conversationId,
       version: row.version,
+      prompt: row.prompt,
+      aiRevisions: row.aiRevisions,
       document,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

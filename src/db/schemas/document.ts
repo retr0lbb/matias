@@ -3,6 +3,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  text,
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -22,6 +23,10 @@ export const assessmentsTable = pgTable(
     document: jsonb().$type<AssessmentDocument>().notNull(),
     // Bumped on every change, for optimistic concurrency.
     version: integer().notNull().default(1),
+    // The request the content was last generated from; reused by regenerate.
+    prompt: text(),
+    // AI changes (revise/regenerate) applied so far; manual patches are free.
+    aiRevisions: integer('ai_revisions').notNull().default(0),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at')
       .$onUpdateFn(() => new Date())

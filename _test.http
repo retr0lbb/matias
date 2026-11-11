@@ -132,3 +132,36 @@ Cookie: {{cookie}}
 ### ASSESSMENT: answer key HTML preview
 GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
 Cookie: {{cookie}}
+
+### ASSESSMENT: manual patch (no AI). "version" is the one from the last response; ids come from the stored JSON
+PATCH {{baseUrl}}/documents/assessments/{{assessmentId}}
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 1,
+    "ops": [
+        { "op": "set_title", "title": "Prova Bimestral de Ciências" },
+        { "op": "update_theme", "theme": { "baseFontSizePt": 14, "numbering": "continuous" } },
+        { "op": "update_header_fields", "fields": { "score": false } }
+    ]
+}
+
+### ASSESSMENT: AI revision (the AI returns a patch)
+POST {{baseUrl}}/documents/assessments/{{assessmentId}}/revise
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 2,
+    "instruction": "Adicione mais uma questão objetiva de 1 ponto sobre a Lua no final da primeira seção."
+}
+
+### ASSESSMENT: regenerate the content (keeps header and theme; "prompt" is optional)
+POST {{baseUrl}}/documents/assessments/{{assessmentId}}/regenerate
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 3
+}
