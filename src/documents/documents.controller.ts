@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { aiAssessmentSchema } from './schemas/test-schemas.js';
+import { aiAssessmentSchema } from './assessment/schemas/content.schema.js';
 import { Public } from '@nestjs/authentication';
 
 @Controller('documents')
