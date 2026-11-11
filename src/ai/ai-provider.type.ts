@@ -1,5 +1,9 @@
 export interface AiProvider {
 	generate(input: { message: string }): Promise<AIResponse>;
+	generateStream(input: {
+		message: string;
+		signal?: AbortSignal;
+	}): AsyncGenerator<AIStreamChunk>;
 }
 
 export type AIResponse = {
@@ -15,3 +19,8 @@ export type AIResponse = {
 	output_text: string;
 	thinking_output?: string;
 };
+
+export type AIStreamChunk =
+	| { type: "text"; text: string }
+	| { type: "thinking"; text: string }
+	| { type: "done"; response: AIResponse };
