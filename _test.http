@@ -5,7 +5,7 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=cUPjdRwJ4qylsovbqzArmcUKTDSTISAv16NYLR93-UY
+@cookie = __Host-sid=gAMKjkYmMwenEtl9prieLsf6KScwPiUv5vs9JwzIMyQ
 
 ### CHAT
 POST {{baseUrl}}/ai/chat?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
@@ -14,6 +14,17 @@ Cookie: {{cookie}}
 
 {
     "prompt": "Qual documento que foi enviado em anexo nesse chat? (CHEAP MODEL)"
+}
+
+### CHAT STREAM (SSE)
+# REST Client shows the response only after the stream ends; use curl -N to watch it live.
+POST {{baseUrl}}/ai/chat/stream?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Como se fosse um profissional senior me explique como o react native funciona por baixo dos panos (CHEAP MODEL)"
 }
 
 ### REGISTER USER
