@@ -13,6 +13,7 @@ import { FileTemplateEngine, LogMailTransport, MailModule, SmtpTransport } from 
 import { join } from 'node:path';
 import { DocumentsModule } from './documents/documents.module.js';
 import { UsageModule } from './usage/usage.module.js';
+import { SubscriptionModule } from './subscription/subscription.module.js';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { UsageModule } from './usage/usage.module.js';
     SharedModule,
     DocumentsModule,
     UsageModule,
+    SubscriptionModule,
   ],
 })
 export class AppModule {}
