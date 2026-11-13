@@ -118,5 +118,7 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 
 # TODO
-- [ ] Create json document parser
-- [ ] Create the web document building pattern
+
+- [ ] integrate usage with new database limits by user plan
+- [ ] refactor create plan function to use new queue and idempotency libs
+- [ ] create a lot of unit and integrations tests on the payment module

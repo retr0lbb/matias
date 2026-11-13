@@ -1,6 +1,8 @@
 import { Authenticate, CurrentUser } from "@nestjs/authentication";
 import { Body, Controller, Post } from "@nestjs/common";
 import { type User } from "../db/schemas/user.js";
+import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
+import { type SubscribeDTO, subscribeSchema } from "./dto/create-subscription.dto.js";
 import { SubscriptionService } from "./subscription.service.js";
 
 @Controller("subscription")
@@ -11,8 +13,8 @@ export class SubscriptionController {
 	@Post("")
 	async subscribe(
 		@CurrentUser() user: User,
-		@Body() body: { planId: string; discountCode: string },
+		@Body(new ZodValidationPipe(subscribeSchema)) body: SubscribeDTO,
 	) {
-		await this.subService.createSubscription(user, body);
+		return await this.subService.createSubscription(user, body);
 	}
 }
