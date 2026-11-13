@@ -47,6 +47,8 @@ interface QueryRecord {
 	limit?: number;
 	returning: boolean;
 	inTransaction: boolean;
+	/** Set on queries that ran inside `db.transaction`; one id per transaction. */
+	transactionId?: number;
 	lock?: string;
 }
 
@@ -63,10 +65,16 @@ const whereParams = (query: QueryRecord | undefined): unknown[] =>
  * runs only when awaited, is recorded in `queries`, and resolves with whatever
  * the handler registered through `on(operation, table)` returns (`[]` when no
  * handler was configured).
+ *
+ * `transaction` emulates a rollback: when the callback throws, the writes it
+ * made are removed from `queries`, so "nothing was written" assertions hold for
+ * rolled back work too. Selects are kept.
  */
 const createDbMock = () => {
 	const queries: QueryRecord[] = [];
 	const handlers = new Map<string, QueryHandler>();
+	const transactionEndListeners: ((transactionId: number) => void)[] = [];
+	let transactionCount = 0;
 
 	const handlerFor = (operation: Operation, tableName: string): QueryHandler => {
 		const key = `${operation}:${tableName}`;
@@ -78,12 +86,13 @@ const createDbMock = () => {
 		return handler;
 	};
 
-	const chainFor = (operation: Operation, inTransaction: boolean, table?: Table) => {
+	const chainFor = (operation: Operation, transactionId: number | undefined, table?: Table) => {
 		const query: QueryRecord = {
 			operation,
 			table: table ? getTableName(table) : "",
 			returning: false,
-			inTransaction,
+			inTransaction: transactionId !== undefined,
+			transactionId,
 		};
 
 		const chain = {
@@ -116,7 +125,7 @@ const createDbMock = () => {
 				return chain;
 			},
 			// oxlint-disable-next-line unicorn/no-thenable -- Drizzle builders are thenables
-			// biome-ignore lint/suspicious/noThenProperty: <explanation>
+			// biome-ignore lint/suspicious/noThenProperty: Drizzle builders are thenables
 			then<Result>(
 				onFulfilled: (rows: unknown[]) => Result,
 				onRejected?: (reason: unknown) => Result,
@@ -129,31 +138,39 @@ const createDbMock = () => {
 		return chain;
 	};
 
-	const clientFor = (inTransaction: boolean) => ({
-		select: vi.fn((_fields?: unknown) => chainFor("select", inTransaction)),
-		insert: vi.fn((table: Table) => chainFor("insert", inTransaction, table)),
-		update: vi.fn((table: Table) => chainFor("update", inTransaction, table)),
-		delete: vi.fn((table: Table) => chainFor("delete", inTransaction, table)),
+	interface Client {
+		select: Mock<(fields?: unknown) => ReturnType<typeof chainFor>>;
+		insert: Mock<(table: Table) => ReturnType<typeof chainFor>>;
+		update: Mock<(table: Table) => ReturnType<typeof chainFor>>;
+		delete: Mock<(table: Table) => ReturnType<typeof chainFor>>;
+		transaction: Mock<(callback: (tx: Client) => Promise<unknown>) => Promise<unknown>>;
+	}
+
+	const clientFor = (transactionId?: number): Client => ({
+		select: vi.fn((_fields?: unknown) => chainFor("select", transactionId)),
+		insert: vi.fn((table: Table) => chainFor("insert", transactionId, table)),
+		update: vi.fn((table: Table) => chainFor("update", transactionId, table)),
+		delete: vi.fn((table: Table) => chainFor("delete", transactionId, table)),
 		transaction: vi.fn(async (callback: (tx: Client) => Promise<unknown>) => {
-			const startedAt = queries.length;
+			transactionCount += 1;
+			const id = transactionCount;
 			try {
-				return await callback(clientFor(true));
+				return await callback(clientFor(id));
 			} catch (error) {
 				// Emula o rollback: escritas feitas dentro da transação não aconteceram.
-				const kept = queries.slice(startedAt).filter((query) => query.operation === "select");
-				queries.splice(startedAt, queries.length - startedAt, ...kept);
+				const rolledBack = queries.filter(
+					(query) => query.transactionId === id && query.operation !== "select",
+				);
+				for (const query of rolledBack) queries.splice(queries.indexOf(query), 1);
 				throw error;
+			} finally {
+				for (const listener of transactionEndListeners) listener(id);
 			}
 		}),
 	});
 
-	type Client = ReturnType<typeof clientFor>;
-
 	return {
-		...clientFor(false),
-		transaction: vi.fn(async (callback: (tx: Client) => Promise<unknown>) =>
-			callback(clientFor(true)),
-		),
+		...clientFor(),
 		queries,
 		/** Handler that decides what `operation` on `table` resolves with. */
 		on: (operation: Operation, table: Table) => handlerFor(operation, getTableName(table)),
@@ -162,6 +179,10 @@ const createDbMock = () => {
 			queries.filter(
 				(query) => query.operation === operation && query.table === getTableName(table),
 			),
+		/** Runs `listener` whenever a transaction commits or rolls back. */
+		onTransactionEnd: (listener: (transactionId: number) => void) => {
+			transactionEndListeners.push(listener);
+		},
 	};
 };
 
@@ -301,6 +322,7 @@ describe("SubscriptionService", () => {
 		db.on("select", promoCodesTable).mockResolvedValue([buildPromo(overrides)]);
 	};
 
+	/** Also true for writes made in a transaction that was rolled back. */
 	const expectNothingWritten = () => {
 		expect(db.ran("insert", subscriptionTable)).toHaveLength(0);
 		expect(db.ran("insert", promoCodeRedemptions)).toHaveLength(0);
@@ -324,8 +346,6 @@ describe("SubscriptionService", () => {
 
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(NOW);
-		// The service prints the promo code while it is being developed.
-		vi.spyOn(console, "log").mockImplementation(() => undefined);
 	});
 
 	afterEach(() => {
@@ -383,6 +403,15 @@ describe("SubscriptionService", () => {
 				expect(db.ran("select", promoCodesTable)).toHaveLength(0);
 			});
 
+			it("should not query promo codes when the discount code is only spaces", async () => {
+				arrangeHappyPath();
+
+				await service.createSubscription(buildUser(), buildPayload({ discountCode: "   " }));
+
+				expect(db.ran("select", promoCodesTable)).toHaveLength(0);
+				expect(db.ran("insert", promoCodeRedemptions)).toHaveLength(0);
+			});
+
 			it("should throw BadRequestException when the discount code does not exist", async () => {
 				arrangeHappyPath();
 				db.on("select", promoCodesTable).mockResolvedValue([]);
@@ -401,6 +430,62 @@ describe("SubscriptionService", () => {
 				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
 
 				expect(whereParams(db.ran("select", promoCodesTable)[0])).toEqual(["FAKE10"]);
+			});
+
+			it.each(["fake10", "  FAKE10  ", " FaKe10"])(
+				"should look the promo code up trimmed and in upper case when '%s' is sent",
+				async (discountCode) => {
+					arrangeHappyPath();
+					arrangePromo();
+
+					await service.createSubscription(buildUser(), buildPayload({ discountCode }));
+
+					expect(whereParams(db.ran("select", promoCodesTable)[0])).toEqual(["FAKE10"]);
+				},
+			);
+
+			it("should lock the promo code row for update inside the transaction", async () => {
+				arrangeHappyPath();
+				arrangePromo();
+
+				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
+
+				const [lookup] = db.ran("select", promoCodesTable);
+				expect(lookup?.lock).toBe("update");
+				expect(lookup?.inTransaction).toBe(true);
+			});
+
+			it("should validate and record the code in the transaction that inserts the subscription", async () => {
+				arrangeHappyPath();
+				arrangePromo({ maxRedemptionsGlobal: 5, maxRedemptionsUser: 1 });
+				db.on("select", promoCodeRedemptions).mockResolvedValue([{ count: 0 }]);
+
+				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
+
+				const transactional = [
+					...db.ran("insert", subscriptionTable),
+					...db.ran("select", promoCodesTable),
+					...db.ran("select", promoCodeRedemptions),
+					...db.ran("insert", promoCodeRedemptions),
+				];
+				expect(transactional).toHaveLength(5);
+				expect(new Set(transactional.map((query) => query.transactionId)).size).toBe(1);
+				expect(transactional[0]?.transactionId).toBeDefined();
+			});
+
+			it("should roll the subscription insert back when the code is rejected", async () => {
+				arrangeHappyPath();
+				arrangePromo({ isValid: false });
+				const insertSubscription = db.on("insert", subscriptionTable);
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+				).rejects.toThrow(BadRequestException);
+
+				// It ran inside the transaction, and the transaction was rolled back.
+				expect(insertSubscription).toHaveBeenCalledTimes(1);
+				expect(db.ran("insert", subscriptionTable)).toHaveLength(0);
+				expect(db.ran("delete", subscriptionTable)).toHaveLength(0);
 			});
 
 			it.each([
@@ -486,7 +571,7 @@ describe("SubscriptionService", () => {
 				).resolves.toBeDefined();
 			});
 
-			it("should count only APPLIED redemptions of the code for the global limit", async () => {
+			it("should count PENDING and APPLIED redemptions of the code for the global limit", async () => {
 				arrangeHappyPath();
 				arrangePromo({ maxRedemptionsGlobal: 5 });
 				db.on("select", promoCodeRedemptions).mockResolvedValue([{ count: 0 }]);
@@ -495,6 +580,7 @@ describe("SubscriptionService", () => {
 
 				expect(whereParams(db.ran("select", promoCodeRedemptions)[0])).toEqual([
 					PROMO_ID,
+					"PENDING",
 					"APPLIED",
 				]);
 			});
@@ -511,6 +597,7 @@ describe("SubscriptionService", () => {
 			it.each([
 				["equals the limit", 1, 1],
 				["is above the limit", 3, 2],
+				["is zero and the limit is zero", 0, 0],
 			])(
 				"should throw BadRequestException when the user redemption count %s",
 				async (_label, redeemed, limit) => {
@@ -524,7 +611,7 @@ describe("SubscriptionService", () => {
 					);
 
 					await expect(act).rejects.toThrow(BadRequestException);
-					await expect(act).rejects.toThrow("Code is already taken");
+					await expect(act).rejects.toThrow("This account already registered a coupon");
 					expectNothingWritten();
 				},
 			);
@@ -539,14 +626,19 @@ describe("SubscriptionService", () => {
 				).resolves.toBeDefined();
 			});
 
-			it("should count the redemptions of this user for the user limit", async () => {
+			it("should count the PENDING and APPLIED redemptions of this user for the user limit", async () => {
 				arrangeHappyPath();
 				arrangePromo({ maxRedemptionsUser: 2 });
 				db.on("select", promoCodeRedemptions).mockResolvedValue([{ count: 0 }]);
 
 				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
 
-				expect(whereParams(db.ran("select", promoCodeRedemptions)[0])).toEqual([PROMO_ID, USER_ID]);
+				expect(whereParams(db.ran("select", promoCodeRedemptions)[0])).toEqual([
+					PROMO_ID,
+					USER_ID,
+					"PENDING",
+					"APPLIED",
+				]);
 			});
 
 			it("should check the global limit before the user limit when both are set", async () => {
@@ -558,36 +650,8 @@ describe("SubscriptionService", () => {
 
 				await expect(
 					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
-				).rejects.toThrow("Code is already taken");
+				).rejects.toThrow("This account already registered a coupon");
 				expect(db.ran("select", promoCodeRedemptions)).toHaveLength(2);
-			});
-
-			// GAP: a per-user limit of 0 is treated as "no limit" (falsy check), while
-			// a global limit of 0 blocks everyone.
-			it("should throw BadRequestException when the user limit is zero", async () => {
-				arrangeHappyPath();
-				arrangePromo({ maxRedemptionsUser: 0 });
-				db.on("select", promoCodeRedemptions).mockResolvedValue([{ count: 0 }]);
-
-				await expect(
-					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
-				).rejects.toThrow(BadRequestException);
-			});
-
-			// GAP: redemptions are inserted as PENDING and only APPLIED ones are
-			// counted, so people who subscribed but have not paid yet do not use up
-			// the global limit and the code can be over-redeemed.
-			it("should count PENDING redemptions toward the global limit", async () => {
-				arrangeHappyPath();
-				arrangePromo({ maxRedemptionsGlobal: 1 });
-				db.on("select", promoCodeRedemptions).mockResolvedValue([{ count: 0 }]);
-
-				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
-
-				expect(whereParams(db.ran("select", promoCodeRedemptions)[0])).not.toEqual([
-					PROMO_ID,
-					"APPLIED",
-				]);
 			});
 
 			it("should record a PENDING redemption linked to the new subscription", async () => {
@@ -631,9 +695,7 @@ describe("SubscriptionService", () => {
 				expectNothingWritten();
 			});
 
-			// GAP: the redemption insert runs outside the try/catch, so when it fails
-			// the PENDING subscription stays behind and every retry gets a 409.
-			it("should remove the pending subscription when recording the redemption fails", async () => {
+			it("should roll the pending subscription back when recording the redemption fails", async () => {
 				arrangeHappyPath();
 				arrangePromo();
 				db.on("insert", promoCodeRedemptions).mockRejectedValue(new Error("connection terminated"));
@@ -642,7 +704,7 @@ describe("SubscriptionService", () => {
 					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
 				).rejects.toThrow("connection terminated");
 
-				expect(db.ran("delete", subscriptionTable)).toHaveLength(1);
+				expectNothingWritten();
 			});
 
 			it("should not call Asaas when recording the redemption fails", async () => {
@@ -757,7 +819,7 @@ describe("SubscriptionService", () => {
 		});
 
 		describe("existing subscription", () => {
-			it.each(["PENDING", "ACTIVE", "EXPIRED", "INACTIVE"] as const)(
+			it.each(["PENDING", "ACTIVE", "EXPIRED"] as const)(
 				"should throw ConflictException when the user already has a %s subscription to the plan",
 				async (status) => {
 					arrangeHappyPath();
@@ -771,12 +833,98 @@ describe("SubscriptionService", () => {
 				},
 			);
 
-			it("should look for a subscription of the same user to the same plan", async () => {
+			it("should look for a subscription of the same user to the same plan that is not INACTIVE", async () => {
 				arrangeHappyPath();
 
 				await service.createSubscription(buildUser(), buildPayload());
 
-				expect(whereParams(db.ran("select", subscriptionTable)[0])).toEqual([PLAN_ID, USER_ID]);
+				expect(whereParams(db.ran("select", subscriptionTable)[0])).toEqual([
+					PLAN_ID,
+					USER_ID,
+					"INACTIVE",
+				]);
+			});
+
+			it("should subscribe again when the only subscription to the plan is INACTIVE", async () => {
+				arrangeHappyPath();
+				const inactive = buildSubscriptionRow({ status: "INACTIVE" });
+				// Answers like the database: the check filters INACTIVE rows out.
+				db.on("select", subscriptionTable).mockImplementation(async (query) =>
+					whereParams(query).includes("INACTIVE") ? [] : [inactive],
+				);
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload()),
+				).resolves.toBeDefined();
+				expect(db.ran("insert", subscriptionTable)).toHaveLength(1);
+			});
+
+			it.each([
+				["on the error", Object.assign(new Error("duplicate key"), { code: "23505" })],
+				[
+					"on the cause of the error",
+					new Error("Failed query", {
+						cause: Object.assign(new Error("duplicate key"), { code: "23505" }),
+					}),
+				],
+			])(
+				"should throw ConflictException when the insert hits the unique index with the code %s",
+				async (_label, failure) => {
+					arrangeHappyPath();
+					db.on("insert", subscriptionTable).mockRejectedValue(failure);
+
+					const act = service.createSubscription(buildUser(), buildPayload());
+
+					await expect(act).rejects.toThrow(ConflictException);
+					await expect(act).rejects.toThrow(
+						"User already has a subscription in progress or active",
+					);
+					expectNothingWritten();
+				},
+			);
+
+			it("should not run the cleanup deletes when the insert hits the unique index", async () => {
+				arrangeHappyPath();
+				db.on("insert", subscriptionTable).mockRejectedValue(
+					Object.assign(new Error("duplicate key"), { code: "23505" }),
+				);
+
+				await expect(service.createSubscription(buildUser(), buildPayload())).rejects.toThrow(
+					ConflictException,
+				);
+
+				// Deleting here would remove the subscription of the request that won.
+				expect(db.queries.filter((query) => query.operation === "delete")).toHaveLength(0);
+			});
+
+			it.each([
+				["a foreign key violation", Object.assign(new Error("fk"), { code: "23503" })],
+				["a deadlock", Object.assign(new Error("deadlock detected"), { code: "40P01" })],
+				["an error without a code", new Error("connection terminated")],
+				["a null rejection", null],
+			])("should rethrow %s from the transaction untouched", async (_label, failure) => {
+				arrangeHappyPath();
+				db.on("insert", subscriptionTable).mockRejectedValue(failure);
+
+				await expect(service.createSubscription(buildUser(), buildPayload())).rejects.toBe(failure);
+				expect(payment.createCustomer).not.toHaveBeenCalled();
+			});
+
+			// GAP: any unique violation raised in the transaction is reported as
+			// "already has a subscription", whichever constraint it came from.
+			it("should not report a subscription conflict when another unique constraint is violated", async () => {
+				arrangeHappyPath();
+				arrangePromo();
+				db.on("insert", promoCodeRedemptions).mockRejectedValue(
+					Object.assign(new Error("duplicate key"), {
+						code: "23505",
+						constraint: "promo_code_redemption_pkey",
+					}),
+				);
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+				).rejects.not.toThrow("User already has a subscription in progress or active");
 			});
 
 			it("should not record a redemption when the user is already subscribed", async () => {
@@ -800,6 +948,53 @@ describe("SubscriptionService", () => {
 				const [insert] = db.ran("insert", subscriptionTable);
 				expect(insert?.values).toEqual({ plan_id: PLAN_ID, user_id: USER_ID, status: "PENDING" });
 				expect(insert?.returning).toBe(true);
+			});
+
+			it("should insert the local subscription inside a single transaction", async () => {
+				arrangeHappyPath();
+
+				await service.createSubscription(buildUser(), buildPayload());
+
+				expect(db.transaction).toHaveBeenCalledTimes(1);
+				expect(db.ran("insert", subscriptionTable)[0]?.inTransaction).toBe(true);
+			});
+
+			it("should call Asaas only after the transaction has finished", async () => {
+				arrangeHappyPath();
+				let transactionOpen = false;
+				const runTransaction = db.transaction.getMockImplementation();
+				db.transaction.mockImplementation(async (callback) => {
+					transactionOpen = true;
+					try {
+						return await runTransaction?.(callback);
+					} finally {
+						transactionOpen = false;
+					}
+				});
+				const openDuringCall: boolean[] = [];
+				payment.createCustomer.mockImplementation(async () => {
+					openDuringCall.push(transactionOpen);
+					return buildAsaasCustomer();
+				});
+				payment.createSubscription.mockImplementation(async () => {
+					openDuringCall.push(transactionOpen);
+					return buildAsaasSubscription();
+				});
+
+				await service.createSubscription(buildUser(), buildPayload());
+
+				// A slow Asaas must not hold the promo row lock or a connection.
+				expect(openDuringCall).toEqual([false, false]);
+			});
+
+			it("should update the local subscription outside the transaction", async () => {
+				arrangeHappyPath();
+
+				await service.createSubscription(buildUser(), buildPayload());
+
+				const updates = db.ran("update", subscriptionTable);
+				expect(updates).toHaveLength(2);
+				expect(updates.every((query) => !query.inTransaction)).toBe(true);
 			});
 
 			it("should create the Asaas customer from the body and the stored user", async () => {
@@ -1279,6 +1474,18 @@ describe("SubscriptionService", () => {
 				expect(payment.createCustomer).not.toHaveBeenCalled();
 			});
 
+			it("should roll back instead of recording a redemption when the insert returns no row", async () => {
+				arrangeHappyPath();
+				arrangePromo();
+				db.on("insert", subscriptionTable).mockResolvedValue([]);
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+				).rejects.toThrow();
+
+				expectNothingWritten();
+			});
+
 			it("should reject when the insert returns no row", async () => {
 				arrangeHappyPath();
 				db.on("insert", subscriptionTable).mockResolvedValue([]);
@@ -1328,20 +1535,128 @@ describe("SubscriptionService", () => {
 		});
 
 		describe("race conditions", () => {
-			/** Makes the fake subscriptions table remember what was inserted. */
+			const LIVE_STATUSES: SubscriptionRow["status"][] = ["PENDING", "ACTIVE", "EXPIRED"];
+
+			/**
+			 * Makes the fake subscriptions table remember its rows and enforce the
+			 * `one_live_subscription_per_user` unique index the way Postgres does.
+			 */
 			const arrangeStatefulSubscriptions = () => {
 				const rows: SubscriptionRow[] = [];
-				db.on("select", subscriptionTable).mockImplementation(async (query) =>
-					query.limit === 1 ? rows.filter((row) => row.customerId !== null) : [...rows],
-				);
-				db.on("insert", subscriptionTable).mockImplementation(async () => {
+				const insertedBy = new Map<string, number>();
+				db.on("select", subscriptionTable).mockImplementation(async (query) => {
+					const params = whereParams(query);
+					const ofUser = rows.filter((row) => params.includes(row.user_id));
+					return query.limit === 1
+						? ofUser.filter((row) => row.customerId !== null)
+						: ofUser.filter((row) => params.includes(row.plan_id));
+				});
+				db.on("insert", subscriptionTable).mockImplementation(async (query) => {
+					const values = query.values as { user_id: string; plan_id: string };
+					const live = rows.some(
+						(row) => row.user_id === values.user_id && LIVE_STATUSES.includes(row.status),
+					);
+					if (live) {
+						// Shape of the error Drizzle throws for a pg unique violation.
+						throw new Error("Failed query: insert into subscriptions", {
+							cause: Object.assign(new Error("duplicate key value"), {
+								code: "23505",
+								constraint: "one_live_subscription_per_user",
+							}),
+						});
+					}
 					const row = buildSubscriptionRow({
 						id: `cccccccc-cccc-4ccc-8ccc-00000000000${rows.length}`,
+						user_id: values.user_id,
+						plan_id: values.plan_id,
 					});
 					rows.push(row);
+					if (query.transactionId !== undefined) insertedBy.set(row.id, query.transactionId);
 					return [row];
 				});
+				db.on("update", subscriptionTable).mockImplementation(async (query) => {
+					const row = rows.find((candidate) => whereParams(query).includes(candidate.id));
+					if (row) Object.assign(row, query.set);
+					return [];
+				});
+				db.on("delete", subscriptionTable).mockImplementation(async (query) => {
+					const index = rows.findIndex((row) => whereParams(query).includes(row.id));
+					if (index !== -1) rows.splice(index, 1);
+					return [];
+				});
+				// A rolled back transaction takes its inserted subscription with it.
+				db.onTransactionEnd((transactionId) => {
+					const committed = db.queries.some(
+						(query) =>
+							query.transactionId === transactionId &&
+							query.operation === "insert" &&
+							query.table === getTableName(subscriptionTable),
+					);
+					const index = rows.findIndex((row) => insertedBy.get(row.id) === transactionId);
+					if (!committed && index !== -1) rows.splice(index, 1);
+				});
 				return rows;
+			};
+
+			/**
+			 * Makes the fake promo tables behave like Postgres: `select ... for
+			 * update` on the code waits until the transaction holding the row ends,
+			 * and a redemption only counts once its transaction commits.
+			 */
+			const arrangeLockedPromo = (overrides: Partial<PromoRow> = {}) => {
+				const state = { redeemed: 0 };
+				const pendingByTransaction = new Map<number, number>();
+				const releaseByTransaction = new Map<number, () => void>();
+				let rowLock: Promise<void> = Promise.resolve();
+
+				db.on("select", promoCodesTable).mockImplementation(async (query) => {
+					const { transactionId } = query;
+					if (query.lock === "update" && transactionId !== undefined) {
+						const previous = rowLock;
+						rowLock = new Promise<void>((resolve) => {
+							releaseByTransaction.set(transactionId, resolve);
+						});
+						await previous;
+					}
+					return [buildPromo(overrides)];
+				});
+				db.on("select", promoCodeRedemptions).mockImplementation(async (query) => [
+					{ count: state.redeemed + (pendingByTransaction.get(query.transactionId ?? -1) ?? 0) },
+				]);
+				db.on("insert", promoCodeRedemptions).mockImplementation(async (query) => {
+					if (query.transactionId === undefined) {
+						state.redeemed += 1;
+					} else {
+						pendingByTransaction.set(
+							query.transactionId,
+							(pendingByTransaction.get(query.transactionId) ?? 0) + 1,
+						);
+					}
+					return [];
+				});
+				db.on("delete", promoCodeRedemptions).mockImplementation(async () => {
+					state.redeemed = Math.max(0, state.redeemed - 1);
+					return [];
+				});
+				db.onTransactionEnd((transactionId) => {
+					const committed = db.queries.some(
+						(query) =>
+							query.transactionId === transactionId &&
+							query.operation === "insert" &&
+							query.table === getTableName(promoCodeRedemptions),
+					);
+					if (committed) state.redeemed += pendingByTransaction.get(transactionId) ?? 0;
+					pendingByTransaction.delete(transactionId);
+					releaseByTransaction.get(transactionId)?.();
+				});
+
+				return state;
+			};
+
+			const arrangeAnyUser = () => {
+				db.on("select", userTable).mockImplementation(async (query) => [
+					buildUser({ id: String(whereParams(query)[0]) }),
+				]);
 			};
 
 			it("should throw ConflictException on a second request made after the first one finished", async () => {
@@ -1350,15 +1665,38 @@ describe("SubscriptionService", () => {
 
 				await service.createSubscription(buildUser(), buildPayload());
 
-				await expect(service.createSubscription(buildUser(), buildPayload())).rejects.toThrow(
-					ConflictException,
-				);
+				const second = service.createSubscription(buildUser(), buildPayload());
+				await expect(second).rejects.toThrow(ConflictException);
+				await expect(second).rejects.toThrow("Subscription already exists");
 				expect(payment.createSubscription).toHaveBeenCalledTimes(1);
 			});
 
-			// GAP: "check then insert" with no lock or unique constraint. Two requests
-			// sent at the same time (double click) both pass the check, so the user
-			// ends up with two local subscriptions and is billed twice on Asaas.
+			it("should throw ConflictException when the user subscribes to another plan while one is live", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+
+				await service.createSubscription(buildUser(), buildPayload());
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload({ planId: PROMO_ID })),
+				).rejects.toThrow("User already has a subscription in progress or active");
+				expect(payment.createSubscription).toHaveBeenCalledTimes(1);
+			});
+
+			it("should let two different users subscribe at the same time", async () => {
+				arrangeHappyPath();
+				const rows = arrangeStatefulSubscriptions();
+				arrangeAnyUser();
+
+				const results = await Promise.allSettled([
+					service.createSubscription(buildUser(), buildPayload()),
+					service.createSubscription(buildUser({ id: PROMO_ID }), buildPayload()),
+				]);
+
+				expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+				expect(rows).toHaveLength(2);
+			});
+
 			it("should create a single Asaas subscription when two requests run at the same time", async () => {
 				arrangeHappyPath();
 				arrangeStatefulSubscriptions();
@@ -1371,8 +1709,22 @@ describe("SubscriptionService", () => {
 				expect(payment.createSubscription).toHaveBeenCalledTimes(1);
 			});
 
-			// GAP: same race, seen from the local table.
-			it("should insert a single local subscription when two requests run at the same time", async () => {
+			it("should answer the losing request with ConflictException when two requests run at the same time", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+
+				const results = await Promise.allSettled([
+					service.createSubscription(buildUser(), buildPayload()),
+					service.createSubscription(buildUser(), buildPayload()),
+				]);
+
+				const rejected = results.filter((result) => result.status === "rejected");
+				expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+				expect(rejected).toHaveLength(1);
+				expect(rejected[0]?.reason).toBeInstanceOf(ConflictException);
+			});
+
+			it("should keep a single local subscription when two requests run at the same time", async () => {
 				arrangeHappyPath();
 				const rows = arrangeStatefulSubscriptions();
 
@@ -1381,12 +1733,13 @@ describe("SubscriptionService", () => {
 					service.createSubscription(buildUser(), buildPayload()),
 				]);
 
+				// The loser must not run the cleanup and delete the winner's row.
 				expect(rows).toHaveLength(1);
+				expect(rows[0]?.asaasSubscriptionId).toBe("sub_fake_1");
+				expect(db.ran("delete", subscriptionTable)).toHaveLength(0);
 			});
 
-			// GAP: same race on the customer: both requests see "no previous
-			// customer" and each one creates its own on Asaas.
-			it("should create a single Asaas customer when two requests run at the same time", async () => {
+			it("should create a single Asaas customer when two requests for different plans run at the same time", async () => {
 				arrangeHappyPath();
 				arrangeStatefulSubscriptions();
 
@@ -1398,17 +1751,25 @@ describe("SubscriptionService", () => {
 				expect(payment.createCustomer).toHaveBeenCalledTimes(1);
 			});
 
-			// GAP: the redemption limit is also "count then insert": two users can
-			// take the last redemption of a code at the same time.
-			it("should let only one of two simultaneous requests take the last redemption", async () => {
+			it("should record a single redemption when the same user sends the same code twice at the same time", async () => {
 				arrangeHappyPath();
-				arrangePromo({ maxRedemptionsGlobal: 1 });
-				let redeemed = 0;
-				db.on("select", promoCodeRedemptions).mockImplementation(async () => [{ count: redeemed }]);
-				db.on("insert", promoCodeRedemptions).mockImplementation(async () => {
-					redeemed += 1;
-					return [];
-				});
+				arrangeStatefulSubscriptions();
+				const promo = arrangeLockedPromo();
+
+				await Promise.allSettled([
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+				]);
+
+				expect(promo.redeemed).toBe(1);
+				expect(db.ran("insert", promoCodeRedemptions)).toHaveLength(1);
+			});
+
+			it("should let only one of two simultaneous users take the last redemption", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+				const promo = arrangeLockedPromo({ maxRedemptionsGlobal: 1 });
+				arrangeAnyUser();
 
 				const results = await Promise.allSettled([
 					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
@@ -1418,7 +1779,85 @@ describe("SubscriptionService", () => {
 					),
 				]);
 
+				const rejected = results.filter((result) => result.status === "rejected");
 				expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+				expect(rejected[0]?.reason).toBeInstanceOf(BadRequestException);
+				expect(promo.redeemed).toBe(1);
+			});
+
+			it("should not leave a subscription behind for the user who lost the last redemption", async () => {
+				arrangeHappyPath();
+				const rows = arrangeStatefulSubscriptions();
+				arrangeLockedPromo({ maxRedemptionsGlobal: 1 });
+				arrangeAnyUser();
+
+				await Promise.allSettled([
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+					service.createSubscription(
+						buildUser({ id: PROMO_ID }),
+						buildPayload({ discountCode: "FAKE10" }),
+					),
+				]);
+
+				// The loser's insert was rolled back with its transaction.
+				expect(rows).toHaveLength(1);
+				expect(db.ran("insert", subscriptionTable)).toHaveLength(1);
+				expect(payment.createSubscription).toHaveBeenCalledTimes(1);
+			});
+
+			it("should free the redemption for the next user when Asaas fails for the first one", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+				const promo = arrangeLockedPromo({ maxRedemptionsGlobal: 1 });
+				arrangeAnyUser();
+				payment.createSubscription
+					.mockRejectedValueOnce(new BadGatewayException("Payment provider error"))
+					.mockResolvedValueOnce(buildAsaasSubscription());
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+				).rejects.toThrow(BadGatewayException);
+				await expect(
+					service.createSubscription(
+						buildUser({ id: PROMO_ID }),
+						buildPayload({ discountCode: "FAKE10" }),
+					),
+				).resolves.toBeDefined();
+
+				expect(promo.redeemed).toBe(1);
+			});
+
+			// GAP: an intent that is never paid stays PENDING forever. Nothing expires
+			// or cancels it, so its redemption keeps holding a slot of the code.
+			it("should not let an unpaid intent hold the last redemption forever", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+				arrangeLockedPromo({ maxRedemptionsGlobal: 1 });
+				arrangeAnyUser();
+				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
+
+				vi.setSystemTime(new Date(NOW.getTime() + 30 * 24 * 60 * 60 * 1000));
+
+				await expect(
+					service.createSubscription(
+						buildUser({ id: PROMO_ID }),
+						buildPayload({ discountCode: "FAKE10" }),
+					),
+				).resolves.toBeDefined();
+			});
+
+			// GAP: same dead end for the user: an unpaid intent blocks every new
+			// attempt with a 409, even a month later, and the payment link is gone.
+			it("should let the user try again when the previous intent was never paid", async () => {
+				arrangeHappyPath();
+				arrangeStatefulSubscriptions();
+				await service.createSubscription(buildUser(), buildPayload());
+
+				vi.setSystemTime(new Date(NOW.getTime() + 30 * 24 * 60 * 60 * 1000));
+
+				await expect(
+					service.createSubscription(buildUser(), buildPayload()),
+				).resolves.toBeDefined();
 			});
 
 			// GAP: the payment webhook can activate the subscription while this

@@ -32,9 +32,9 @@ export class AsaasWebhookController {
 	@Public()
 	@Post("")
 	@HttpCode(200)
-	async handle(@Headers("asaas-access-token") token: string | undefined, @Body() body: unknown) {
-		if (!this.paymentService.isValidWebhookToken(token)) {
-			throw new UnauthorizedException("Invalid webhook token");
+	async handle(@Headers() headers: any | undefined, @Body() body: unknown) {
+		if (!this.paymentService.isValidWebhookToken(headers["asaas-access-token"])) {
+			throw new UnauthorizedException("BLOCKED FROM ASAAS");
 		}
 
 		const parsed = asaasWebhookSchema.safeParse(body);

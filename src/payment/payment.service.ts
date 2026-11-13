@@ -81,9 +81,11 @@ export class PaymentService {
 		}
 		if (!token) return false;
 
-		const received = Buffer.from(token);
-		const expected = Buffer.from(this.webhookToken);
-		return received.length === expected.length && timingSafeEqual(received, expected);
+		if (token !== this.webhookToken) {
+			return false;
+		}
+
+		return true;
 	}
 
 	private post<T>(path: string, body: object): Promise<T> {
