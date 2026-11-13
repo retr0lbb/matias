@@ -1,9 +1,9 @@
 import { Logger, UnauthorizedException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { MockedFunction, MockInstance } from "vitest";
-import { PaymentService } from "../payment/payment.service.js";
+import { PaymentService } from "../../payment/payment.service.js";
+import { SubscriptionService } from "../subscription.service.js";
 import { AsaasWebhookController } from "./asaas-webhook.controller.js";
-import { SubscriptionService } from "./subscription.service.js";
 
 // Tests marked with "GAP:" describe behavior the webhook should have but does
 // not have yet. They are expected to fail until the source is fixed.
@@ -179,7 +179,10 @@ describe("AsaasWebhookController", () => {
 			});
 
 			it("should ignore fields Asaas adds to the event", async () => {
-				const event = { ...buildEvent("PAYMENT_RECEIVED", { brandNewField: { nested: 1 } }), extra: [] };
+				const event = {
+					...buildEvent("PAYMENT_RECEIVED", { brandNewField: { nested: 1 } }),
+					extra: [],
+				};
 
 				await expect(controller.handle(TOKEN, event)).resolves.toEqual({ received: true });
 				expect(subscriptionService.activateFromPayment).toHaveBeenCalledWith(SUBSCRIPTION_ID);
@@ -189,7 +192,9 @@ describe("AsaasWebhookController", () => {
 				const failure = new Error("connection terminated");
 				subscriptionService.activateFromPayment.mockRejectedValue(failure);
 
-				await expect(controller.handle(TOKEN, buildEvent("PAYMENT_RECEIVED"))).rejects.toBe(failure);
+				await expect(controller.handle(TOKEN, buildEvent("PAYMENT_RECEIVED"))).rejects.toBe(
+					failure,
+				);
 			});
 
 			it("should acknowledge both deliveries when the same event arrives twice", async () => {
@@ -243,10 +248,7 @@ describe("AsaasWebhookController", () => {
 			it("should fall back to the Asaas subscription id when the payment has no external reference", async () => {
 				subscriptionService.activateFromPayment.mockResolvedValue(false);
 
-				await controller.handle(
-					TOKEN,
-					buildEvent("PAYMENT_RECEIVED", { externalReference: null }),
-				);
+				await controller.handle(TOKEN, buildEvent("PAYMENT_RECEIVED", { externalReference: null }));
 
 				expect(subscriptionService.activateFromPayment).not.toHaveBeenCalledWith(null);
 			});

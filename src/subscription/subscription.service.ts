@@ -6,7 +6,7 @@ import {
 	UnauthorizedException,
 } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { and, count, eq, isNotNull } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, not } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { planTable } from "../db/schemas/plans.js";
 import { promoCodeRedemptions } from "../db/schemas/promo-code-redemptions.js";
@@ -41,61 +41,6 @@ export class SubscriptionService {
 		const [foundUser] = await this.db.select().from(userTable).where(eq(userTable.id, user.id));
 		if (!foundUser) throw new UnauthorizedException("User not logged in");
 
-		const [hasDiscount] = payload.discountCode
-			? await this.db
-					.select()
-					.from(promoCodesTable)
-					.where(eq(promoCodesTable.code, payload.discountCode))
-			: [null];
-
-		console.log(hasDiscount);
-
-		if (!hasDiscount && payload.discountCode) {
-			throw new BadRequestException("Invalid promotional code");
-		}
-
-		if (hasDiscount) {
-			if (!hasDiscount.isValid) {
-				throw new BadRequestException("Discount code is invalid");
-			}
-
-			if (new Date(hasDiscount.endsAt) < new Date()) {
-				throw new BadRequestException("Discount code is expired");
-			}
-
-			if (hasDiscount.maxRedemptionsGlobal !== null) {
-				const [countRedeem] = await this.db
-					.select({ count: count() })
-					.from(promoCodeRedemptions)
-					.where(
-						and(
-							eq(promoCodeRedemptions.promoCodeId, hasDiscount.id),
-							eq(promoCodeRedemptions.status, "APPLIED"),
-						),
-					);
-
-				if (countRedeem.count >= hasDiscount.maxRedemptionsGlobal)
-					throw new BadRequestException("Maximum global request for this code");
-			}
-
-			if (hasDiscount.maxRedemptionsUser) {
-				const [userRedemptions] = await this.db
-					.select({
-						count: count(),
-					})
-					.from(promoCodeRedemptions)
-					.where(
-						and(
-							eq(promoCodeRedemptions.promoCodeId, hasDiscount.id),
-							eq(promoCodeRedemptions.userId, user.id),
-						),
-					);
-				if (userRedemptions.count >= hasDiscount.maxRedemptionsUser) {
-					throw new BadRequestException("Code is already taken");
-				}
-			}
-		}
-
 		const [plann] = await this.db.select().from(planTable).where(eq(planTable.id, payload.planId));
 
 		if (!plann || plann.is_active === false) {
@@ -111,33 +56,100 @@ export class SubscriptionService {
 			.select()
 			.from(subscriptionTable)
 			.where(
-				and(eq(subscriptionTable.plan_id, payload.planId), eq(subscriptionTable.user_id, user.id)),
-			); //ver se eh justo fazer isso
+				and(
+					eq(subscriptionTable.plan_id, payload.planId),
+					eq(subscriptionTable.user_id, user.id),
+					not(eq(subscriptionTable.status, "INACTIVE")),
+				),
+			);
 
 		if (hasAlreadyASubscription) {
 			throw new ConflictException("Subscription already exists"); //tratar melhor esse erro
 		}
 
-		const [newSubscription] = await this.db
-			.insert(subscriptionTable)
-			.values({
-				plan_id: payload.planId,
-				user_id: user.id,
-				status: "PENDING",
-			})
-			.returning();
+		const discountCode = payload.discountCode?.trim().toUpperCase() || undefined;
+		const { newSubscription, coupon } = await this.db
+			.transaction(async (tx) => {
+				const [newSubscription] = await tx
+					.insert(subscriptionTable)
+					.values({
+						plan_id: payload.planId,
+						user_id: user.id,
+						status: "PENDING",
+					})
+					.returning();
 
-		if (hasDiscount) {
-			await this.db.insert(promoCodeRedemptions).values({
-				discountValue: hasDiscount.discountValue,
-				durationInCicle: hasDiscount.durationInCicle,
-				promoCodeId: hasDiscount.id,
-				userId: user.id,
-				discountType: hasDiscount.discountType,
-				subscriptionId: newSubscription.id,
-				status: "PENDING",
+				if (!discountCode) return { newSubscription, coupon: null };
+
+				const [coupon] = await tx
+					.select()
+					.from(promoCodesTable)
+					.where(eq(promoCodesTable.code, discountCode))
+					.for("update");
+
+				if (!coupon) {
+					throw new BadRequestException("Invalid promotional code");
+				}
+
+				if (!coupon.isValid) {
+					throw new BadRequestException("Discount code is invalid");
+				}
+
+				if (new Date(coupon.endsAt) < new Date()) {
+					throw new BadRequestException("Discount code is expired");
+				}
+
+				if (coupon.maxRedemptionsGlobal !== null) {
+					const [redeemed] = await tx
+						.select({ count: count() })
+						.from(promoCodeRedemptions)
+						.where(
+							and(
+								eq(promoCodeRedemptions.promoCodeId, coupon.id),
+								inArray(promoCodeRedemptions.status, ["PENDING", "APPLIED"]),
+							),
+						);
+
+					if (redeemed.count >= coupon.maxRedemptionsGlobal) {
+						throw new BadRequestException("Maximum global request for this code");
+					}
+				}
+
+				if (coupon.maxRedemptionsUser !== null) {
+					const [userRedemptions] = await tx
+						.select({ count: count() })
+						.from(promoCodeRedemptions)
+						.where(
+							and(
+								eq(promoCodeRedemptions.promoCodeId, coupon.id),
+								eq(promoCodeRedemptions.userId, user.id),
+								inArray(promoCodeRedemptions.status, ["PENDING", "APPLIED"]),
+							),
+						);
+
+					if (userRedemptions.count >= coupon.maxRedemptionsUser) {
+						throw new BadRequestException("This account already registered a coupon");
+					}
+				}
+
+				await tx.insert(promoCodeRedemptions).values({
+					discountValue: coupon.discountValue,
+					durationInCicle: coupon.durationInCicle,
+					promoCodeId: coupon.id,
+					userId: user.id,
+					subscriptionId: newSubscription.id,
+					discountType: coupon.discountType,
+					status: "PENDING",
+				});
+
+				return { newSubscription, coupon };
+			})
+			.catch((error) => {
+				if (isUniqueViolation(error)) {
+					throw new ConflictException("User already has a subscription in progress or active");
+				}
+				throw error;
 			});
-		}
 
 		try {
 			const customerId = await this.resolveCustomerId(foundUser, payload);
@@ -219,10 +231,7 @@ export class SubscriptionService {
 				.update(subscriptionTable)
 				.set({ status: "ACTIVE" })
 				.where(
-					and(
-						eq(subscriptionTable.id, externalReference),
-						eq(subscriptionTable.status, "PENDING"),
-					),
+					and(eq(subscriptionTable.id, externalReference), eq(subscriptionTable.status, "PENDING")),
 				)
 				.returning();
 
@@ -246,4 +255,10 @@ export class SubscriptionService {
 		const plans = await this.db.select().from(planTable).where(eq(planTable.is_active, true));
 		return plans;
 	}
+}
+
+function isUniqueViolation(error: unknown): boolean {
+	const err = error as { code?: string; cause?: { code?: string } };
+	// dependendo da versão do Drizzle, o erro do pg vem em `cause`
+	return err?.code === "23505" || err?.cause?.code === "23505";
 }

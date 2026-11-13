@@ -8,9 +8,9 @@ import {
 	Post,
 	UnauthorizedException,
 } from "@nestjs/common";
-import { PaymentService } from "../payment/payment.service.js";
-import { asaasWebhookSchema } from "./dto/asaas-webhook.dto.js";
-import { SubscriptionService } from "./subscription.service.js";
+import { PaymentService } from "../../payment/payment.service.js";
+import { asaasWebhookSchema } from "../dto/asaas-webhook.dto.js";
+import { SubscriptionService } from "../subscription.service.js";
 
 // PIX goes straight to RECEIVED; a card is CONFIRMED first and only becomes
 // RECEIVED about a month later, so both mean "paid".

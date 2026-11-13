@@ -47,6 +47,7 @@ interface QueryRecord {
 	limit?: number;
 	returning: boolean;
 	inTransaction: boolean;
+	lock?: string;
 }
 
 type QueryHandler = Mock<(query: QueryRecord) => Promise<unknown[]>>;
@@ -110,7 +111,12 @@ const createDbMock = () => {
 				query.returning = true;
 				return chain;
 			},
+			for(strength: "update" | "share" | "no key update" | "key share") {
+				query.lock = strength;
+				return chain;
+			},
 			// oxlint-disable-next-line unicorn/no-thenable -- Drizzle builders are thenables
+			// biome-ignore lint/suspicious/noThenProperty: <explanation>
 			then<Result>(
 				onFulfilled: (rows: unknown[]) => Result,
 				onRejected?: (reason: unknown) => Result,
@@ -128,6 +134,17 @@ const createDbMock = () => {
 		insert: vi.fn((table: Table) => chainFor("insert", inTransaction, table)),
 		update: vi.fn((table: Table) => chainFor("update", inTransaction, table)),
 		delete: vi.fn((table: Table) => chainFor("delete", inTransaction, table)),
+		transaction: vi.fn(async (callback: (tx: Client) => Promise<unknown>) => {
+			const startedAt = queries.length;
+			try {
+				return await callback(clientFor(true));
+			} catch (error) {
+				// Emula o rollback: escritas feitas dentro da transação não aconteceram.
+				const kept = queries.slice(startedAt).filter((query) => query.operation === "select");
+				queries.splice(startedAt, queries.length - startedAt, ...kept);
+				throw error;
+			}
+		}),
 	});
 
 	type Client = ReturnType<typeof clientFor>;
@@ -1025,19 +1042,22 @@ describe("SubscriptionService", () => {
 				["rejects the CPF", new BadRequestException("Invalid CPF")],
 				["is down", new ServiceUnavailableException("Payment provider unavailable")],
 				["answers an error", new BadGatewayException("Payment provider error")],
-			])("should drop the local intent and rethrow when Asaas %s on customer creation", async (_l, failure) => {
-				arrangeHappyPath();
-				arrangePromo();
-				payment.createCustomer.mockRejectedValue(failure);
+			])(
+				"should drop the local intent and rethrow when Asaas %s on customer creation",
+				async (_l, failure) => {
+					arrangeHappyPath();
+					arrangePromo();
+					payment.createCustomer.mockRejectedValue(failure);
 
-				await expect(
-					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
-				).rejects.toBe(failure);
+					await expect(
+						service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
+					).rejects.toBe(failure);
 
-				expect(whereParams(db.ran("delete", promoCodeRedemptions)[0])).toEqual([SUBSCRIPTION_ID]);
-				expect(whereParams(db.ran("delete", subscriptionTable)[0])).toEqual([SUBSCRIPTION_ID]);
-				expect(payment.createSubscription).not.toHaveBeenCalled();
-			});
+					expect(whereParams(db.ran("delete", promoCodeRedemptions)[0])).toEqual([SUBSCRIPTION_ID]);
+					expect(whereParams(db.ran("delete", subscriptionTable)[0])).toEqual([SUBSCRIPTION_ID]);
+					expect(payment.createSubscription).not.toHaveBeenCalled();
+				},
+			);
 
 			it("should delete the redemption before the subscription it references", async () => {
 				arrangeHappyPath();
@@ -1064,16 +1084,21 @@ describe("SubscriptionService", () => {
 			it.each([
 				["rejects the data", new BadRequestException("Invalid customer")],
 				["answers an error", new BadGatewayException("Payment provider error")],
-			])("should drop the local intent and rethrow when Asaas %s on subscription creation", async (_l, failure) => {
-				arrangeHappyPath();
-				payment.createSubscription.mockRejectedValue(failure);
+			])(
+				"should drop the local intent and rethrow when Asaas %s on subscription creation",
+				async (_l, failure) => {
+					arrangeHappyPath();
+					payment.createSubscription.mockRejectedValue(failure);
 
-				await expect(service.createSubscription(buildUser(), buildPayload())).rejects.toBe(failure);
+					await expect(service.createSubscription(buildUser(), buildPayload())).rejects.toBe(
+						failure,
+					);
 
-				expect(db.ran("delete", promoCodeRedemptions)).toHaveLength(1);
-				expect(db.ran("delete", subscriptionTable)).toHaveLength(1);
-				expect(payment.listSubscriptionPayments).not.toHaveBeenCalled();
-			});
+					expect(db.ran("delete", promoCodeRedemptions)).toHaveLength(1);
+					expect(db.ran("delete", subscriptionTable)).toHaveLength(1);
+					expect(payment.listSubscriptionPayments).not.toHaveBeenCalled();
+				},
+			);
 
 			// GAP: a timeout on subscription creation does not mean Asaas did not
 			// create it. Deleting the local row then leaves a billable subscription
@@ -1266,14 +1291,17 @@ describe("SubscriptionService", () => {
 			it.each([
 				["has no id", { ...buildAsaasCustomer(), id: undefined }],
 				["is null", null],
-			])("should not create the Asaas subscription when the Asaas customer %s", async (_l, customer) => {
-				arrangeHappyPath();
-				payment.createCustomer.mockResolvedValue(customer as unknown as AsaasCustomer);
+			])(
+				"should not create the Asaas subscription when the Asaas customer %s",
+				async (_l, customer) => {
+					arrangeHappyPath();
+					payment.createCustomer.mockResolvedValue(customer as unknown as AsaasCustomer);
 
-				await service.createSubscription(buildUser(), buildPayload()).catch(() => undefined);
+					await service.createSubscription(buildUser(), buildPayload()).catch(() => undefined);
 
-				expect(payment.createSubscription).not.toHaveBeenCalled();
-			});
+					expect(payment.createSubscription).not.toHaveBeenCalled();
+				},
+			);
 
 			// GAP: a subscription without an id is "stored" as undefined and reported
 			// to the client as a success.
@@ -1383,10 +1411,7 @@ describe("SubscriptionService", () => {
 				});
 
 				const results = await Promise.allSettled([
-					service.createSubscription(
-						buildUser(),
-						buildPayload({ discountCode: "FAKE10" }),
-					),
+					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
 					service.createSubscription(
 						buildUser({ id: PROMO_ID }),
 						buildPayload({ discountCode: "FAKE10" }),
