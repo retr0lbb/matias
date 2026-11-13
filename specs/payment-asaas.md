@@ -102,3 +102,16 @@ ASAAS_API_URL=https://api-sandbox.asaas.com/v3
 - "Recurrent PIX" = a PIX charge generated every cycle. Pix Automático (bank-authorized auto debit) is a separate Asaas API and is not used.
 
 Not done: refunds/chargebacks/overdue/cancellation events, promo redemption status, registering the webhook on Asaas (needs a public HTTPS URL).
+
+---
+
+# Step 4: webhook gaps (payment without id, missing reference, money going back)
+
+1. **Payment without `id`**: `payment.id` becomes optional in `asaasWebhookSchema`; the id is only used for logging.
+2. **Missing/foreign `externalReference`**: the webhook also sends the Asaas subscription id (`payment.subscription`, or `subscription.id` on `SUBSCRIPTION_*` events). The service matches by local id when the reference is one of our UUIDs, otherwise by `subscriptions.asaas_subscription_id`.
+3. **Events that used to be dropped**:
+   - `PAYMENT_OVERDUE` -> `SubscriptionService.markPastDue`: `ACTIVE` -> `EXPIRED` (past due, still live, user keeps the plan). A later `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED` moves `EXPIRED` back to `ACTIVE` without touching the user.
+   - `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `SUBSCRIPTION_INACTIVATED`, `SUBSCRIPTION_DELETED` -> `SubscriptionService.deactivate`: any live status -> `INACTIVE` (+ `cancelledAt`, `cancelReason` = event name) and `users.plan` -> `FREE`, in one transaction.
+   - `PAYMENT_DELETED`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED`: logged as a warning only. A deleted charge does not end a subscription, and a refused card turns into `PAYMENT_OVERDUE` if it stays unpaid.
+
+Not done: cancelling the subscription on Asaas after a refund/chargeback, orphan subscriptions, promo redemption status, tests for the new service methods.

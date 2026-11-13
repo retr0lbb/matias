@@ -220,19 +220,22 @@ export class SubscriptionService {
 	/**
 	 * Activates the PENDING subscription a paid Asaas charge belongs to and
 	 * moves the user to the plan. `externalReference` is the local subscription
-	 * id we sent to Asaas. Returns false when there is nothing to activate
+	 * id we sent to Asaas; when it is missing or not ours, the Asaas subscription
+	 * id is used instead. Returns false when there is nothing to activate
 	 * (unknown reference, or already activated by an earlier delivery).
 	 */
-	async activateFromPayment(externalReference: string | null | undefined): Promise<boolean> {
-		if (!externalReference || !UUID_PATTERN.test(externalReference)) return false;
+	async activateFromPayment(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId?: string | null,
+	): Promise<boolean> {
+		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		if (!match) return false;
 
 		return this.db.transaction(async (tx) => {
 			const [activated] = await tx
 				.update(subscriptionTable)
 				.set({ status: "ACTIVE" })
-				.where(
-					and(eq(subscriptionTable.id, externalReference), eq(subscriptionTable.status, "PENDING")),
-				)
+				.where(and(match, eq(subscriptionTable.status, "PENDING")))
 				.returning();
 
 			if (!activated) return false;
@@ -249,6 +252,90 @@ export class SubscriptionService {
 
 			return true;
 		});
+	}
+
+	/**
+	 * Moves a past due (`EXPIRED`) subscription back to ACTIVE when its overdue
+	 * charge is finally paid. The user never left the plan, so only the
+	 * subscription changes. Returns false when there is nothing past due.
+	 */
+	async reactivatePastDue(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId?: string | null,
+	): Promise<boolean> {
+		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		if (!match) return false;
+
+		const [reactivated] = await this.db
+			.update(subscriptionTable)
+			.set({ status: "ACTIVE" })
+			.where(and(match, eq(subscriptionTable.status, "EXPIRED")))
+			.returning({ id: subscriptionTable.id });
+
+		return Boolean(reactivated);
+	}
+
+	/**
+	 * Marks an ACTIVE subscription as past due (`EXPIRED`) when a charge is
+	 * overdue. The subscription is still live and the user keeps the plan.
+	 * Returns false when there is no active subscription to mark.
+	 */
+	async markPastDue(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId?: string | null,
+	): Promise<boolean> {
+		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		if (!match) return false;
+
+		const [pastDue] = await this.db
+			.update(subscriptionTable)
+			.set({ status: "EXPIRED" })
+			.where(and(match, eq(subscriptionTable.status, "ACTIVE")))
+			.returning({ id: subscriptionTable.id });
+
+		return Boolean(pastDue);
+	}
+
+	/**
+	 * Ends a live subscription (refund, chargeback, cancellation on Asaas) and
+	 * moves the user back to the free plan. Returns false when there is no live
+	 * subscription to end.
+	 */
+	async deactivate(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId: string | null | undefined,
+		reason: string,
+	): Promise<boolean> {
+		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		if (!match) return false;
+
+		return this.db.transaction(async (tx) => {
+			const [ended] = await tx
+				.update(subscriptionTable)
+				.set({ status: "INACTIVE", cancelledAt: new Date(), cancelReason: reason })
+				.where(and(match, inArray(subscriptionTable.status, ["PENDING", "ACTIVE", "EXPIRED"])))
+				.returning();
+
+			if (!ended) return false;
+
+			await tx.update(userTable).set({ plan: "FREE" }).where(eq(userTable.id, ended.user_id));
+
+			return true;
+		});
+	}
+
+	/** Local id when the reference is ours, otherwise the Asaas subscription id. */
+	private matchSubscription(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId: string | null | undefined,
+	) {
+		if (externalReference && UUID_PATTERN.test(externalReference)) {
+			return eq(subscriptionTable.id, externalReference);
+		}
+		if (asaasSubscriptionId) {
+			return eq(subscriptionTable.asaasSubscriptionId, asaasSubscriptionId);
+		}
+		return undefined;
 	}
 
 	async listPlans() {

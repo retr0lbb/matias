@@ -22,7 +22,8 @@
 		"test:e2e": "vitest run --config ./vitest.config.e2e.ts",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
-		"db:studio": "drizzle-kit studio"
+		"db:studio": "drizzle-kit studio",
+		"start:ngrok": "ngrok http 3000 --url https://backfire-skeletal-coil.ngrok-free.dev"
 	},
 	"dependencies": {
 		"@biomejs/biome": "^2.6.5",
