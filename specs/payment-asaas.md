@@ -115,3 +115,36 @@ Not done: refunds/chargebacks/overdue/cancellation events, promo redemption stat
    - `PAYMENT_DELETED`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED`: logged as a warning only. A deleted charge does not end a subscription, and a refused card turns into `PAYMENT_OVERDUE` if it stays unpaid.
 
 Not done: cancelling the subscription on Asaas after a refund/chargeback, orphan subscriptions, promo redemption status, tests for the new service methods.
+
+---
+
+# Step 5: store every charge in the `payments` table
+
+Decisions confirmed with the user:
+- New unique column `asaas_payment_id` (`pay_...`); `customerId` keeps the Asaas customer id (`cus_...`).
+- `next_due_date` is the due date of **this** charge: renamed to `due_date` (type `date`), plus `paid_at` and `created_at`.
+- A row is created when the charge is created: the first charge inside `createSubscription` (`PENDING`), recurring ones on the `PAYMENT_CREATED` webhook. Later events move the status.
+- `payment_status_enum` gains `OVERDUE` and `REFUNDED`. Asaas `CREDIT_CARD` is mapped to `CARTAO_DE_CREDITO` in code.
+- `value` is stored in cents, like `plans.price` (assumed; Asaas sends BRL).
+
+## Status by webhook event
+
+| Event | Status | Only when the row is |
+|---|---|---|
+| `PAYMENT_CREATED` | `PENDING` | new (never overwrites) |
+| `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED` | `PAID` (+ `paid_at`, first one wins) | not `REFUNDED` |
+| `PAYMENT_OVERDUE` | `OVERDUE` | `PENDING` |
+| `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED` | `REFUNDED` | any |
+| `PAYMENT_DELETED`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED` | `FAILED` | `PENDING` or `OVERDUE` |
+
+Every event is an upsert on `asaas_payment_id`, so a missed `PAYMENT_CREATED` or a repeated delivery is harmless. Charges that belong to no local subscription are not stored.
+
+## Changes
+- `src/db/schemas/payments.ts` + generated migration.
+- `src/subscription/subscription-match.ts` (new): the "local id, else Asaas subscription id" condition, shared by both services.
+- `src/subscription/payment-record.ts` (new): pure mapping from an Asaas charge to a `payments` row.
+- `src/subscription/payment-record.service.ts` (new): `recordFromWebhook(event, payment)`.
+- `src/subscription/subscription.service.ts`: `createSubscription` stores the first charge; a failure there does not undo the subscription.
+- `src/subscription/webhooks/asaas-webhook.controller.ts` + spec, `src/subscription/dto/asaas-webhook.dto.ts`, `subscription.module.ts`.
+
+Not done: spec for `PaymentRecordService` and for the new insert in `createSubscription`.

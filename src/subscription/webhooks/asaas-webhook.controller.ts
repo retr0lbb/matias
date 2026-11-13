@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { PaymentService } from "../../payment/payment.service.js";
 import { asaasWebhookSchema } from "../dto/asaas-webhook.dto.js";
+import { PaymentRecordService } from "../payment-record.service.js";
 import { SubscriptionService } from "../subscription.service.js";
 
 // PIX goes straight to RECEIVED; a card is CONFIRMED first and only becomes
@@ -38,6 +39,7 @@ export class AsaasWebhookController {
 	constructor(
 		private readonly paymentService: PaymentService,
 		private readonly subService: SubscriptionService,
+		private readonly paymentRecords: PaymentRecordService,
 	) {}
 
 	/**
@@ -65,9 +67,7 @@ export class AsaasWebhookController {
 		const asaasSubscriptionId = payment?.subscription ?? subscription?.id;
 		const subject = payment?.id ?? subscription?.id ?? "an unidentified object";
 
-		if (PAID_EVENTS.has(event)) {
-			if (!payment) return { received: true };
-
+		if (PAID_EVENTS.has(event) && payment) {
 			const activated = await this.subService.activateFromPayment(reference, asaasSubscriptionId);
 			// Not a first payment: it may be the late payment of an overdue charge.
 			const reactivated =
@@ -90,6 +90,10 @@ export class AsaasWebhookController {
 		} else if (WATCHED_EVENTS.has(event)) {
 			this.logger.warn(`${event} for ${subject}: no change made to the subscription`);
 		}
+
+		// Keeps the `payments` table in step with the charge. It runs last so a
+		// failure here is retried by Asaas without holding back the subscription.
+		if (payment) await this.paymentRecords.recordFromWebhook(event, payment);
 
 		return { received: true };
 	}

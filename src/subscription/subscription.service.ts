@@ -8,6 +8,7 @@ import {
 import { InjectDrizzle } from "@nestjs/drizzle";
 import { and, count, eq, inArray, isNotNull, not } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { paymentTables } from "../db/schemas/payments.js";
 import { planTable } from "../db/schemas/plans.js";
 import { promoCodeRedemptions } from "../db/schemas/promo-code-redemptions.js";
 import { promoCodesTable } from "../db/schemas/promo-codes.js";
@@ -16,6 +17,8 @@ import { planEnum, User, userTable } from "../db/schemas/user.js";
 import type { AsaasCycle } from "../payment/dto/asaas-subscription.dto.js";
 import { PaymentService } from "../payment/payment.service.js";
 import { SubscribeDTO } from "./dto/create-subscription.dto.js";
+import { type AsaasCharge, toPaymentRow } from "./payment-record.js";
+import { matchSubscription } from "./subscription-match.js";
 
 // plans.billing_interval -> Asaas cycle. "MONTLY" is how the current Pro plan
 // row is spelled in the database.
@@ -27,8 +30,6 @@ const ASAAS_CYCLE_BY_INTERVAL: Record<string, AsaasCycle | undefined> = {
 	SEMIANNUALLY: "SEMIANNUALLY",
 	YEARLY: "YEARLY",
 };
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class SubscriptionService {
@@ -180,6 +181,10 @@ export class SubscriptionService {
 				.listSubscriptionPayments(asaasSubscription.id)
 				.catch(() => []);
 
+			if (firstPayment) {
+				await this.storeFirstCharge(firstPayment, user.id, newSubscription.id);
+			}
+
 			return {
 				...newSubscription,
 				customerId,
@@ -194,6 +199,23 @@ export class SubscriptionService {
 				.where(eq(promoCodeRedemptions.subscriptionId, newSubscription.id));
 			await this.db.delete(subscriptionTable).where(eq(subscriptionTable.id, newSubscription.id));
 			throw error;
+		}
+	}
+
+	/**
+	 * Stores the first charge of a subscription as PENDING. Never throws: the
+	 * subscription already exists on Asaas, and the PAYMENT_CREATED webhook
+	 * stores the same charge (it may even have done so already).
+	 */
+	private async storeFirstCharge(charge: AsaasCharge, userId: string, subscriptionId: string) {
+		const row = toPaymentRow(charge, { userId, subscriptionId }, "PENDING");
+		if (!row) return;
+
+		try {
+			await this.db.insert(paymentTables).values(row);
+		} catch {
+			// Already stored by the webhook, or the database failed; the webhook
+			// events of this charge will store it either way.
 		}
 	}
 
@@ -228,7 +250,7 @@ export class SubscriptionService {
 		externalReference: string | null | undefined,
 		asaasSubscriptionId?: string | null,
 	): Promise<boolean> {
-		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		const match = matchSubscription(externalReference, asaasSubscriptionId);
 		if (!match) return false;
 
 		return this.db.transaction(async (tx) => {
@@ -263,7 +285,7 @@ export class SubscriptionService {
 		externalReference: string | null | undefined,
 		asaasSubscriptionId?: string | null,
 	): Promise<boolean> {
-		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		const match = matchSubscription(externalReference, asaasSubscriptionId);
 		if (!match) return false;
 
 		const [reactivated] = await this.db
@@ -284,7 +306,7 @@ export class SubscriptionService {
 		externalReference: string | null | undefined,
 		asaasSubscriptionId?: string | null,
 	): Promise<boolean> {
-		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		const match = matchSubscription(externalReference, asaasSubscriptionId);
 		if (!match) return false;
 
 		const [pastDue] = await this.db
@@ -306,7 +328,7 @@ export class SubscriptionService {
 		asaasSubscriptionId: string | null | undefined,
 		reason: string,
 	): Promise<boolean> {
-		const match = this.matchSubscription(externalReference, asaasSubscriptionId);
+		const match = matchSubscription(externalReference, asaasSubscriptionId);
 		if (!match) return false;
 
 		return this.db.transaction(async (tx) => {
@@ -322,20 +344,6 @@ export class SubscriptionService {
 
 			return true;
 		});
-	}
-
-	/** Local id when the reference is ours, otherwise the Asaas subscription id. */
-	private matchSubscription(
-		externalReference: string | null | undefined,
-		asaasSubscriptionId: string | null | undefined,
-	) {
-		if (externalReference && UUID_PATTERN.test(externalReference)) {
-			return eq(subscriptionTable.id, externalReference);
-		}
-		if (asaasSubscriptionId) {
-			return eq(subscriptionTable.asaasSubscriptionId, asaasSubscriptionId);
-		}
-		return undefined;
 	}
 
 	async listPlans() {

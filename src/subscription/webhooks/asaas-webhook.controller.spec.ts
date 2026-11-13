@@ -2,6 +2,7 @@ import { Logger, UnauthorizedException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { MockedFunction, MockInstance } from "vitest";
 import { PaymentService } from "../../payment/payment.service.js";
+import { PaymentRecordService } from "../payment-record.service.js";
 import { SubscriptionService } from "../subscription.service.js";
 import { AsaasWebhookController } from "./asaas-webhook.controller.js";
 
@@ -21,6 +22,16 @@ const createSubscriptionServiceMock = () => ({
 	markPastDue: vi.fn() as unknown as MockedFunction<SubscriptionService["markPastDue"]>,
 	deactivate: vi.fn() as unknown as MockedFunction<SubscriptionService["deactivate"]>,
 });
+
+const createPaymentRecordServiceMock = () => ({
+	recordFromWebhook: vi.fn() as unknown as MockedFunction<
+		PaymentRecordService["recordFromWebhook"]
+	>,
+});
+
+/** Same keys, every value replaced by `map(value)`. */
+const mapValues = <Value>(source: Record<string, unknown>, map: (value: unknown) => Value) =>
+	Object.fromEntries(Object.entries(source).map(([key, value]) => [key, map(value)]));
 
 /** Request headers as Nest hands them over; no token means the header is absent. */
 const headersWith = (token?: string): Record<string, string> => ({
@@ -46,6 +57,7 @@ const buildEvent = (event: string, payment: Record<string, unknown> | null = {})
 					status: "RECEIVED",
 					billingType: "PIX",
 					value: 29.9,
+					dueDate: "2026-11-13",
 					...payment,
 				},
 			}
@@ -56,6 +68,7 @@ describe("AsaasWebhookController", () => {
 	let controller: AsaasWebhookController;
 	let paymentService: ReturnType<typeof createPaymentServiceMock>;
 	let subscriptionService: ReturnType<typeof createSubscriptionServiceMock>;
+	let paymentRecords: ReturnType<typeof createPaymentRecordServiceMock>;
 	let infoLog: MockInstance<Logger["log"]>;
 	let warnLog: MockInstance<Logger["warn"]>;
 
@@ -67,12 +80,15 @@ describe("AsaasWebhookController", () => {
 		subscriptionService.reactivatePastDue.mockResolvedValue(false);
 		subscriptionService.markPastDue.mockResolvedValue(true);
 		subscriptionService.deactivate.mockResolvedValue(true);
+		paymentRecords = createPaymentRecordServiceMock();
+		paymentRecords.recordFromWebhook.mockResolvedValue(true);
 
 		const module = await Test.createTestingModule({
 			controllers: [AsaasWebhookController],
 			providers: [
 				{ provide: PaymentService, useValue: paymentService },
 				{ provide: SubscriptionService, useValue: subscriptionService },
+				{ provide: PaymentRecordService, useValue: paymentRecords },
 			],
 		}).compile();
 
@@ -599,6 +615,102 @@ describe("AsaasWebhookController", () => {
 				await controller.handle(headersWith(TOKEN), buildEvent("PAYMENT_CREATED"));
 
 				expect(warnLog).not.toHaveBeenCalled();
+			});
+		});
+
+		describe("payment records", () => {
+			it.each([
+				"PAYMENT_CREATED",
+				"PAYMENT_CONFIRMED",
+				"PAYMENT_RECEIVED",
+				"PAYMENT_OVERDUE",
+				"PAYMENT_REFUNDED",
+				"PAYMENT_CHARGEBACK_REQUESTED",
+				"PAYMENT_DELETED",
+				"PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
+				"PAYMENT_UPDATED",
+			])("should hand the charge of '%s' to the payment records", async (event) => {
+				await controller.handle(headersWith(TOKEN), buildEvent(event));
+
+				expect(paymentRecords.recordFromWebhook).toHaveBeenCalledTimes(1);
+				expect(paymentRecords.recordFromWebhook).toHaveBeenCalledWith(event, {
+					id: "pay_fake_1",
+					customer: "cus_fake_1",
+					subscription: ASAAS_SUBSCRIPTION_ID,
+					externalReference: SUBSCRIPTION_ID,
+					billingType: "PIX",
+					value: 29.9,
+					dueDate: "2026-11-13",
+				});
+			});
+
+			it("should record the charge after the subscription was activated", async () => {
+				await controller.handle(headersWith(TOKEN), buildEvent("PAYMENT_RECEIVED"));
+
+				const activatedAt = subscriptionService.activateFromPayment.mock.invocationCallOrder[0];
+				const recordedAt = paymentRecords.recordFromWebhook.mock.invocationCallOrder[0];
+				expect(activatedAt).toBeLessThan(recordedAt ?? 0);
+			});
+
+			it.each([
+				["a value that is a string", { value: "29.90" }],
+				["a billing type that is a number", { billingType: 1 }],
+				["a due date that is a number", { dueDate: 20261113 }],
+				["a customer that is an object", { customer: {} }],
+			])("should still activate the subscription when the charge has %s", async (_label, field) => {
+				await controller.handle(headersWith(TOKEN), buildEvent("PAYMENT_RECEIVED", field));
+
+				expect(subscriptionService.activateFromPayment).toHaveBeenCalledWith(
+					SUBSCRIPTION_ID,
+					ASAAS_SUBSCRIPTION_ID,
+				);
+				const [, charge] = paymentRecords.recordFromWebhook.mock.calls[0] ?? [];
+				expect(charge).toMatchObject({ id: "pay_fake_1", ...mapValues(field, () => undefined) });
+			});
+
+			it.each([
+				["nothing was written", false],
+				["the charge was written", true],
+			])("should acknowledge the event when %s", async (_label, written) => {
+				paymentRecords.recordFromWebhook.mockResolvedValue(written);
+
+				await expect(
+					controller.handle(headersWith(TOKEN), buildEvent("PAYMENT_CREATED")),
+				).resolves.toEqual({ received: true });
+			});
+
+			it("should fail the delivery when recording the charge fails, so Asaas retries it", async () => {
+				const failure = new Error("connection terminated");
+				paymentRecords.recordFromWebhook.mockRejectedValue(failure);
+
+				await expect(
+					controller.handle(headersWith(TOKEN), buildEvent("PAYMENT_RECEIVED")),
+				).rejects.toBe(failure);
+			});
+
+			it.each(["PAYMENT_RECEIVED", "SUBSCRIPTION_DELETED"])(
+				"should record nothing when '%s' carries no payment",
+				async (event) => {
+					await controller.handle(headersWith(TOKEN), buildEvent(event, null));
+
+					expect(paymentRecords.recordFromWebhook).not.toHaveBeenCalled();
+				},
+			);
+
+			it("should record nothing when the body is malformed", async () => {
+				await controller.handle(headersWith(TOKEN), { event: 123, payment: { id: "pay_fake_1" } });
+
+				expect(paymentRecords.recordFromWebhook).not.toHaveBeenCalled();
+			});
+
+			it("should record nothing when the token is invalid", async () => {
+				paymentService.isValidWebhookToken.mockReturnValue(false);
+
+				await expect(
+					controller.handle(headersWith("wrong-token"), buildEvent("PAYMENT_RECEIVED")),
+				).rejects.toThrow(UnauthorizedException);
+
+				expect(paymentRecords.recordFromWebhook).not.toHaveBeenCalled();
 			});
 		});
 	});
