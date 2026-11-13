@@ -122,3 +122,4 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 - [ ] integrate usage with new database limits by user plan
 - [ ] refactor create plan function to use new queue and idempotency libs
 - [ ] create a lot of unit and integrations tests on the payment module
+- [ ] add cpf and full name collection on the pre-existing user

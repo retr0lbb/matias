@@ -1,5 +1,5 @@
-import { Authenticate, CurrentUser } from "@nestjs/authentication";
-import { Body, Controller, Post } from "@nestjs/common";
+import { Authenticate, CurrentUser, Public } from "@nestjs/authentication";
+import { Body, Controller, Get, Post } from "@nestjs/common";
 import { type User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
 import { type SubscribeDTO, subscribeSchema } from "./dto/create-subscription.dto.js";
@@ -16,5 +16,11 @@ export class SubscriptionController {
 		@Body(new ZodValidationPipe(subscribeSchema)) body: SubscribeDTO,
 	) {
 		return await this.subService.createSubscription(user, body);
+	}
+
+	@Public()
+	@Get("/plans")
+	async getPlans() {
+		return this.subService.listPlans();
 	}
 }

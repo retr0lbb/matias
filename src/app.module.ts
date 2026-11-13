@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { DocumentsModule } from './documents/documents.module.js';
 import { UsageModule } from './usage/usage.module.js';
 import { SubscriptionModule } from './subscription/subscription.module.js';
+import { PaymentModule } from './payment/payment.module.js';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { SubscriptionModule } from './subscription/subscription.module.js';
     DocumentsModule,
     UsageModule,
     SubscriptionModule,
+    PaymentModule,
   ],
 })
 export class AppModule {}

@@ -12,6 +12,7 @@ import {
 export const planTable = pgTable("plans", {
 	id: uuid().primaryKey().defaultRandom(),
 	name: text().notNull(),
+	description: text(),
 	price: integer().notNull(),
 	currency: text().notNull(),
 	billing_interval: varchar().notNull(),

@@ -21,5 +21,6 @@ export const subscriptionTable = pgTable("subscriptions", {
 	subscribedAt: timestamp("subscribed_at").defaultNow(),
 	cancelledAt: timestamp("cancelled_at"),
 	cancelReason: text("cancel_reason"),
-	customerId: varchar(), //returned id from asaas Needs to be null to create fist than update method
+	customerId: varchar(), // Asaas customer id (cus_...); null until the customer is created
+	asaasSubscriptionId: varchar("asaas_subscription_id"), // Asaas subscription id (sub_...); null until it is created
 });
