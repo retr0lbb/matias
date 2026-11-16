@@ -4,7 +4,7 @@ import { and, count, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
 import { messageExpenseEnum, messagesTable } from "../db/schemas/message.js";
-import { assessmentsTable } from "../db/schemas/assessment.js";
+import { assessmentsTable } from "../db/schemas/document.js";
 import { ragDocumentsTable } from "../db/schemas/rag-document.js";
 import type { Plan, User } from "../db/schemas/user.js";
 import { getCurrentCycle, type BillingCycle } from "./billing-cycle.js";

@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { UsageModule } from '../usage/usage.module.js';
-import { AssessmentAiService } from './assessment/ai/assessment-ai.service.js';
-import { AssessmentsController } from './assessment/assessments.controller.js';
-import { AssessmentsService } from './assessment/assessments.service.js';
-import { PdfRendererService } from './assessment/pdf/pdf-renderer.service.js';
+import { AssessmentAiService } from './ai/document-ai.service.js';
+import { AssessmentsController } from './documents.controller.js';
+import { AssessmentsService } from './documents.service.js';
+import { PdfRendererService } from './pdf/pdf-renderer.service.js';
 
 @Module({
   imports: [ConfigModule, UsageModule],

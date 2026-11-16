@@ -14,10 +14,10 @@ import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
   type Assessment,
   assessmentsTable,
-} from '../../db/schemas/assessment.js';
-import { conversationsTable } from '../../db/schemas/conversation.js';
-import { UsageService, type UsageSubject } from '../../usage/usage.service.js';
-import { AssessmentAiService } from './ai/assessment-ai.service.js';
+} from '../db/schemas/document.js';
+import { conversationsTable } from '../db/schemas/conversation.js';
+import { UsageService, type UsageSubject } from '../usage/usage.service.js';
+import { AssessmentAiService } from './ai/document-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
 import { applyPatch } from './patch/apply-patch.js';
 import { PdfRendererService } from './pdf/pdf-renderer.service.js';
