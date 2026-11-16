@@ -11,6 +11,7 @@ import { Test } from "@nestjs/testing";
 import { getTableName, type SQL, type Table } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { Mock, MockedFunction } from "vitest";
+import { paymentTables } from "../db/schemas/payments.js";
 import { planTable } from "../db/schemas/plans.js";
 import { promoCodeRedemptions } from "../db/schemas/promo-code-redemptions.js";
 import { promoCodesTable } from "../db/schemas/promo-codes.js";
@@ -33,6 +34,7 @@ const PROMO_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 type PlanRow = typeof planTable.$inferSelect;
 type PromoRow = typeof promoCodesTable.$inferSelect;
+type RedemptionRow = typeof promoCodeRedemptions.$inferSelect;
 type SubscriptionRow = typeof subscriptionTable.$inferSelect;
 
 type Operation = "select" | "insert" | "update" | "delete";
@@ -194,6 +196,7 @@ const createPaymentServiceMock = () => ({
 	listSubscriptionPayments: vi.fn() as unknown as MockedFunction<
 		PaymentService["listSubscriptionPayments"]
 	>,
+	updateSubscription: vi.fn() as unknown as MockedFunction<PaymentService["updateSubscription"]>,
 });
 
 type PaymentServiceMock = ReturnType<typeof createPaymentServiceMock>;
@@ -528,15 +531,27 @@ describe("SubscriptionService", () => {
 				).resolves.toBeDefined();
 			});
 
-			// GAP: startsAt is stored but never checked, so a code scheduled for the
-			// future can already be redeemed.
 			it("should throw BadRequestException when the code has not started yet", async () => {
 				arrangeHappyPath();
 				arrangePromo({ startsAt: new Date(NOW.getTime() + 60_000) });
 
+				const act = service.createSubscription(
+					buildUser(),
+					buildPayload({ discountCode: "FAKE10" }),
+				);
+
+				await expect(act).rejects.toThrow(BadRequestException);
+				await expect(act).rejects.toThrow("Discount code is not active yet");
+				expectNothingWritten();
+			});
+
+			it("should accept a code that starts exactly now", async () => {
+				arrangeHappyPath();
+				arrangePromo({ startsAt: new Date(NOW) });
+
 				await expect(
 					service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" })),
-				).rejects.toThrow(BadRequestException);
+				).resolves.toBeDefined();
 			});
 
 			it.each([
@@ -672,18 +687,131 @@ describe("SubscriptionService", () => {
 				});
 			});
 
-			// GAP: the promo code is validated and recorded, but Asaas is charged the
-			// full plan price.
-			it("should charge the discounted value when a percentage code is applied", async () => {
+			it("should send the full price and a percentage discount to Asaas when a percentage code is applied", async () => {
 				arrangeHappyPath();
 				arrangePromo({ discountType: "PERCENTAGE", discountValue: 10 });
 
 				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
 
 				expect(payment.createSubscription).toHaveBeenCalledWith(
-					expect.objectContaining({ value: 26.91 }),
+					expect.objectContaining({
+						value: 29.9,
+						discount: { type: "PERCENTAGE", value: 10, dueDateLimitDays: 0 },
+					}),
 				);
 			});
+
+			it("should send a fixed discount to Asaas in BRL when a fixed code is applied", async () => {
+				arrangeHappyPath();
+				arrangePromo({ discountType: "FIXED", discountValue: 550 });
+
+				await service.createSubscription(buildUser(), buildPayload({ discountCode: "FAKE10" }));
+
+				expect(payment.createSubscription).toHaveBeenCalledWith(
+					expect.objectContaining({
+						value: 29.9,
+						discount: { type: "FIXED", value: 5.5, dueDateLimitDays: 0 },
+					}),
+				);
+			});
+
+			it("should not send a discount to Asaas when no discount code is sent", async () => {
+				arrangeHappyPath();
+
+				await service.createSubscription(buildUser(), buildPayload());
+
+				expect(payment.createSubscription.mock.calls[0]?.[0]).not.toHaveProperty("discount");
+			});
+
+			it("should return the discounted price rounded down to the cent when a percentage code is applied", async () => {
+				arrangeHappyPath();
+				arrangePromo({ discountType: "PERCENTAGE", discountValue: 33, durationInCicle: 2 });
+
+				const result = await service.createSubscription(
+					buildUser(),
+					buildPayload({ discountCode: "FAKE10" }),
+				);
+
+				// 2990 * 0.67 = 2003.3
+				expect(result).toMatchObject({
+					originalPrice: 2990,
+					discountedPrice: 2003,
+					discountedCycles: 2,
+				});
+			});
+
+			it("should return the price minus the discount when a fixed code is applied", async () => {
+				arrangeHappyPath();
+				arrangePromo({ discountType: "FIXED", discountValue: 500, durationInCicle: 1 });
+
+				const result = await service.createSubscription(
+					buildUser(),
+					buildPayload({ discountCode: "FAKE10" }),
+				);
+
+				expect(result).toMatchObject({
+					originalPrice: 2990,
+					discountedPrice: 2490,
+					discountedCycles: 1,
+				});
+			});
+
+			it("should accept a code when the discounted price equals the minimum charge", async () => {
+				arrangeHappyPath();
+				arrangePromo({ discountType: "FIXED", discountValue: 2490 });
+
+				const result = await service.createSubscription(
+					buildUser(),
+					buildPayload({ discountCode: "FAKE10" }),
+				);
+
+				expect(result).toMatchObject({ discountedPrice: 500 });
+			});
+
+			it.each([
+				["leaves the price one cent below the minimum charge", "FIXED", 2491],
+				["equals the plan price", "FIXED", 2990],
+				["is bigger than the plan price", "FIXED", 5000],
+				["is 100 percent", "PERCENTAGE", 100],
+				["is more than 100 percent", "PERCENTAGE", 150],
+				["leaves a percentage price below the minimum charge", "PERCENTAGE", 90],
+			] as const)(
+				"should throw BadRequestException without writing anything when the discount %s",
+				async (_label, discountType, discountValue) => {
+					arrangeHappyPath();
+					arrangePromo({ discountType, discountValue });
+
+					const act = service.createSubscription(
+						buildUser(),
+						buildPayload({ discountCode: "FAKE10" }),
+					);
+
+					await expect(act).rejects.toThrow(BadRequestException);
+					await expect(act).rejects.toThrow("Discount code cannot be applied to this plan");
+					expectNothingWritten();
+				},
+			);
+
+			it.each([
+				["has no discount type", { discountType: null }],
+				["has a discount value of 0", { discountValue: 0 }],
+				["has a negative discount value", { discountValue: -10 }],
+			])(
+				"should throw BadRequestException without writing anything when the code %s",
+				async (_label, overrides) => {
+					arrangeHappyPath();
+					arrangePromo(overrides);
+
+					const act = service.createSubscription(
+						buildUser(),
+						buildPayload({ discountCode: "FAKE10" }),
+					);
+
+					await expect(act).rejects.toThrow(BadRequestException);
+					await expect(act).rejects.toThrow("Discount code is invalid");
+					expectNothingWritten();
+				},
+			);
 
 			it("should reject without writing anything when the promo lookup fails", async () => {
 				arrangeHappyPath();
@@ -1080,6 +1208,9 @@ describe("SubscriptionService", () => {
 					asaasSubscriptionId: "sub_fake_1",
 					paymentMethod: "PIX",
 					paymentUrl: "https://sandbox.asaas.example/i/fake_1",
+					originalPrice: 2990,
+					discountedPrice: null,
+					discountedCycles: null,
 				});
 			});
 
@@ -2009,15 +2140,53 @@ describe("SubscriptionService", () => {
 			expect(db.ran("update", userTable)).toHaveLength(0);
 		});
 
-		// GAP: paying never marks the promo redemption as APPLIED, so redemptions
-		// stay PENDING forever and the global limit never counts them.
 		it("should mark the promo redemption of the subscription as APPLIED", async () => {
 			arrangeActivation();
 
 			await service.activateFromPayment(SUBSCRIPTION_ID);
 
 			const [update] = db.ran("update", promoCodeRedemptions);
-			expect(update?.set).toMatchObject({ status: "APPLIED" });
+			expect(update?.set).toEqual({ status: "APPLIED", redeemedAt: NOW });
+			expect(update?.inTransaction).toBe(true);
+		});
+
+		it("should only mark the PENDING redemption of the activated subscription", async () => {
+			arrangeActivation();
+
+			await service.activateFromPayment(SUBSCRIPTION_ID);
+
+			expect(whereParams(db.ran("update", promoCodeRedemptions)[0])).toEqual([
+				SUBSCRIPTION_ID,
+				"PENDING",
+			]);
+		});
+
+		it("should activate when the subscription has no promo redemption", async () => {
+			arrangeActivation();
+			db.on("update", promoCodeRedemptions).mockResolvedValue([]);
+
+			await expect(service.activateFromPayment(SUBSCRIPTION_ID)).resolves.toBe(true);
+
+			expect(db.ran("update", userTable)).toHaveLength(1);
+		});
+
+		it("should not touch promo redemptions when there is nothing to activate", async () => {
+			arrangeActivation();
+			db.on("update", subscriptionTable).mockResolvedValue([]);
+
+			await service.activateFromPayment(SUBSCRIPTION_ID);
+
+			expect(db.ran("update", promoCodeRedemptions)).toHaveLength(0);
+		});
+
+		it("should reject so the transaction rolls back when marking the redemption fails", async () => {
+			arrangeActivation();
+			const failure = new Error("connection terminated");
+			db.on("update", promoCodeRedemptions).mockRejectedValue(failure);
+
+			await expect(service.activateFromPayment(SUBSCRIPTION_ID)).rejects.toBe(failure);
+
+			expect(db.ran("update", userTable)).toHaveLength(0);
 		});
 
 		// GAP: subscribedAt is set when the intent is created, not when it is paid.
@@ -2117,6 +2286,262 @@ describe("SubscriptionService", () => {
 
 			expect(results).toEqual([true, true]);
 			expect(db.transaction).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("deactivate", () => {
+		const arrangeEnded = () => {
+			db.on("update", subscriptionTable).mockResolvedValue([
+				buildSubscriptionRow({ status: "INACTIVE" }),
+			]);
+		};
+
+		it("should mark the promo redemption of the ended subscription as REVOKED", async () => {
+			arrangeEnded();
+
+			await expect(
+				service.deactivate(SUBSCRIPTION_ID, undefined, "PAYMENT_REFUNDED"),
+			).resolves.toBe(true);
+
+			const [update] = db.ran("update", promoCodeRedemptions);
+			expect(update?.set).toEqual({ status: "REVOKED" });
+			expect(update?.inTransaction).toBe(true);
+		});
+
+		it("should only revoke the PENDING or APPLIED redemption of the ended subscription", async () => {
+			arrangeEnded();
+
+			await service.deactivate(SUBSCRIPTION_ID, undefined, "PAYMENT_REFUNDED");
+
+			expect(whereParams(db.ran("update", promoCodeRedemptions)[0])).toEqual([
+				SUBSCRIPTION_ID,
+				"PENDING",
+				"APPLIED",
+			]);
+		});
+
+		it("should not touch promo redemptions when there is no live subscription to end", async () => {
+			db.on("update", subscriptionTable).mockResolvedValue([]);
+
+			await expect(
+				service.deactivate(SUBSCRIPTION_ID, undefined, "PAYMENT_REFUNDED"),
+			).resolves.toBe(false);
+
+			expect(db.ran("update", promoCodeRedemptions)).toHaveLength(0);
+		});
+
+		it("should not touch promo redemptions when nothing identifies the subscription", async () => {
+			await expect(service.deactivate(null, null, "PAYMENT_REFUNDED")).resolves.toBe(false);
+
+			expect(db.queries).toHaveLength(0);
+		});
+
+		it("should reject so the transaction rolls back when revoking the redemption fails", async () => {
+			arrangeEnded();
+			const failure = new Error("connection terminated");
+			db.on("update", promoCodeRedemptions).mockRejectedValue(failure);
+
+			await expect(
+				service.deactivate(SUBSCRIPTION_ID, undefined, "PAYMENT_REFUNDED"),
+			).rejects.toBe(failure);
+
+			await expect(db.transaction.mock.results[0]?.value).rejects.toBe(failure);
+		});
+	});
+
+	describe("endDiscountIfExhausted", () => {
+		const REDEMPTION_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+		const buildRedemption = (overrides: Partial<RedemptionRow> = {}): RedemptionRow => ({
+			id: REDEMPTION_ID,
+			promoCodeId: PROMO_ID,
+			userId: USER_ID,
+			subscriptionId: SUBSCRIPTION_ID,
+			status: "APPLIED",
+			discountType: "PERCENTAGE",
+			durationInCicle: 3,
+			discountValue: 10,
+			redeemedAt: NOW,
+			discountRemovedAt: null,
+			createdAt: NOW,
+			...overrides,
+		});
+
+		/** A subscription whose every discounted cycle was already paid. */
+		const arrangeExhausted = (overrides: Partial<RedemptionRow> = {}, paidCharges = 3) => {
+			db.on("select", subscriptionTable).mockResolvedValue([
+				{ id: SUBSCRIPTION_ID, asaasSubscriptionId: "sub_fake_1" },
+			]);
+			db.on("select", promoCodeRedemptions).mockResolvedValue([buildRedemption(overrides)]);
+			db.on("select", paymentTables).mockResolvedValue([{ count: paidCharges }]);
+			payment.updateSubscription.mockResolvedValue(buildAsaasSubscription());
+		};
+
+		const expectDiscountKept = () => {
+			expect(payment.updateSubscription).not.toHaveBeenCalled();
+			expect(db.ran("update", promoCodeRedemptions)).toHaveLength(0);
+		};
+
+		it("should return false without touching the database when nothing identifies the subscription", async () => {
+			await expect(service.endDiscountIfExhausted(null, null)).resolves.toBe(false);
+
+			expect(db.queries).toHaveLength(0);
+			expectDiscountKept();
+		});
+
+		it("should return false when there is no local subscription", async () => {
+			arrangeExhausted();
+			db.on("select", subscriptionTable).mockResolvedValue([]);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expectDiscountKept();
+		});
+
+		it("should return false when the subscription was never created on Asaas", async () => {
+			arrangeExhausted();
+			db.on("select", subscriptionTable).mockResolvedValue([
+				{ id: SUBSCRIPTION_ID, asaasSubscriptionId: null },
+			]);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expect(db.ran("select", promoCodeRedemptions)).toHaveLength(0);
+			expectDiscountKept();
+		});
+
+		it("should return false when the subscription has no applied redemption with a discount left", async () => {
+			arrangeExhausted();
+			db.on("select", promoCodeRedemptions).mockResolvedValue([]);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expect(db.ran("select", paymentTables)).toHaveLength(0);
+			expectDiscountKept();
+		});
+
+		it("should look for the APPLIED redemption of the subscription", async () => {
+			arrangeExhausted();
+
+			await service.endDiscountIfExhausted(SUBSCRIPTION_ID);
+
+			const [lookup] = db.ran("select", promoCodeRedemptions);
+			expect(whereParams(lookup)).toEqual([SUBSCRIPTION_ID, "APPLIED"]);
+			expect(lookup?.where && dialect.sqlToQuery(lookup.where).sql).toContain(
+				'"discount_removed_at" is null',
+			);
+		});
+
+		it("should return false when the redemption has no discount type", async () => {
+			arrangeExhausted({ discountType: null });
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expectDiscountKept();
+		});
+
+		it("should count the PAID charges of the subscription", async () => {
+			arrangeExhausted();
+
+			await service.endDiscountIfExhausted(SUBSCRIPTION_ID);
+
+			expect(whereParams(db.ran("select", paymentTables)[0])).toEqual([SUBSCRIPTION_ID, "PAID"]);
+		});
+
+		it.each([
+			["no charge was paid", 3, 0],
+			["one discounted cycle is still left", 3, 2],
+		])("should keep the discount when %s", async (_label, durationInCicle, paidCharges) => {
+			arrangeExhausted({ durationInCicle }, paidCharges);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expectDiscountKept();
+		});
+
+		it("should keep the discount when the paid charges cannot be counted", async () => {
+			arrangeExhausted();
+			db.on("select", paymentTables).mockResolvedValue([]);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(false);
+
+			expectDiscountKept();
+		});
+
+		it.each([
+			["the last discounted cycle was paid", 3, 3],
+			["more charges were paid than discounted cycles", 1, 2],
+		])("should remove the discount on Asaas when %s", async (_label, durationInCicle, paidCharges) => {
+			arrangeExhausted({ durationInCicle }, paidCharges);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).resolves.toBe(true);
+
+			expect(payment.updateSubscription).toHaveBeenCalledTimes(1);
+			expect(payment.updateSubscription).toHaveBeenCalledWith("sub_fake_1", {
+				discount: { value: 0, dueDateLimitDays: 0, type: "PERCENTAGE" },
+				updatePendingPayments: true,
+			});
+		});
+
+		it("should keep the discount type of a fixed code when removing the discount", async () => {
+			arrangeExhausted({ discountType: "FIXED", discountValue: 500 });
+
+			await service.endDiscountIfExhausted(SUBSCRIPTION_ID);
+
+			expect(payment.updateSubscription).toHaveBeenCalledWith(
+				"sub_fake_1",
+				expect.objectContaining({ discount: { value: 0, dueDateLimitDays: 0, type: "FIXED" } }),
+			);
+		});
+
+		it("should mark the redemption so the discount is removed only once", async () => {
+			arrangeExhausted();
+
+			await service.endDiscountIfExhausted(SUBSCRIPTION_ID);
+
+			const [update] = db.ran("update", promoCodeRedemptions);
+			expect(update?.set).toEqual({ discountRemovedAt: NOW });
+			expect(whereParams(update)).toEqual([REDEMPTION_ID]);
+		});
+
+		it("should find the subscription by the Asaas id when the reference is not ours", async () => {
+			arrangeExhausted();
+
+			await expect(service.endDiscountIfExhausted("056984", "sub_fake_1")).resolves.toBe(true);
+
+			expect(whereParams(db.ran("select", subscriptionTable)[0])).toEqual(["sub_fake_1"]);
+		});
+
+		it("should reject without marking the redemption when Asaas fails", async () => {
+			arrangeExhausted();
+			const failure = new BadGatewayException("Payment provider error");
+			payment.updateSubscription.mockRejectedValue(failure);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).rejects.toBe(failure);
+
+			expect(db.ran("update", promoCodeRedemptions)).toHaveLength(0);
+		});
+
+		it("should reject when marking the redemption fails", async () => {
+			arrangeExhausted();
+			const failure = new Error("connection terminated");
+			db.on("update", promoCodeRedemptions).mockRejectedValue(failure);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).rejects.toBe(failure);
+		});
+
+		it.each([
+			["the subscription lookup", subscriptionTable],
+			["the redemption lookup", promoCodeRedemptions],
+			["the paid charges count", paymentTables],
+		])("should reject without calling Asaas when %s fails", async (_label, table) => {
+			arrangeExhausted();
+			const failure = new Error("connection terminated");
+			db.on("select", table).mockRejectedValue(failure);
+
+			await expect(service.endDiscountIfExhausted(SUBSCRIPTION_ID)).rejects.toBe(failure);
+
+			expectDiscountKept();
 		});
 	});
 

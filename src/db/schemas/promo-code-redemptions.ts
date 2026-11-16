@@ -24,5 +24,7 @@ export const promoCodeRedemptions = pgTable("promo_code_redemption", {
 	durationInCicle: integer("duration_in_cicles").notNull(),
 	discountValue: integer("discount_value").notNull(),
 	redeemedAt: timestamp("redeemed_at"),
+	// Set once the discount was removed from the Asaas subscription (all discounted cycles paid).
+	discountRemovedAt: timestamp("discount_removed_at"),
 	createdAt: timestamp("created_at").defaultNow(),
 });

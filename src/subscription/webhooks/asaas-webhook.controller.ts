@@ -96,6 +96,12 @@ export class AsaasWebhookController {
 		// failure here is retried by Asaas without holding back the subscription.
 		if (payment) await this.paymentRecords.recordFromWebhook(event, payment);
 
+		// Counts the paid charges stored above, so it has to run after them.
+		if (PAID_EVENTS.has(event) && payment) {
+			const ended = await this.subService.endDiscountIfExhausted(reference, asaasSubscriptionId);
+			if (ended) this.logger.log(`${event} for ${subject}: promo discount removed from Asaas`);
+		}
+
 		return { received: true };
 	}
 }

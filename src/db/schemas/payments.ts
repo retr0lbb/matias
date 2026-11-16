@@ -22,7 +22,7 @@ export const paymentTables = pgTable("payments", {
 	dueDate: date("due_date"), // due date of this charge, YYYY-MM-DD
 	status: paymentStatusEnum("status").default("PENDING"),
 	value: integer().notNull(), // in cents, like plans.price
-	paidAt: timestamp("paid_at").defaultNow().notNull(),
+	paidAt: timestamp("paid_at"), // null until the charge is paid
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

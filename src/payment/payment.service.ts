@@ -16,6 +16,7 @@ import type {
 	AsaasPayment,
 	AsaasSubscription,
 	CreateAsaasSubscriptionInput,
+	UpdateAsaasSubscriptionInput,
 } from "./dto/asaas-subscription.dto.js";
 
 const ASAAS_SANDBOX_URL = "https://api-sandbox.asaas.com/v3";
@@ -58,6 +59,18 @@ export class PaymentService {
 		return this.post<AsaasSubscription>("/subscriptions", input);
 	}
 
+	/** Changes an existing Asaas subscription (`sub_...`). */
+	async updateSubscription(
+		subscriptionId: string,
+		input: UpdateAsaasSubscriptionInput,
+	): Promise<AsaasSubscription> {
+		return this.request<AsaasSubscription>(
+			"PUT",
+			`/subscriptions/${encodeURIComponent(subscriptionId)}`,
+			input,
+		);
+	}
+
 	/**
 	 * Lists the charges Asaas already generated for a subscription. The first
 	 * one exists right after the subscription is created.
@@ -92,7 +105,11 @@ export class PaymentService {
 		return this.request<T>("POST", path, body);
 	}
 
-	private async request<T>(method: "GET" | "POST", path: string, body?: object): Promise<T> {
+	private async request<T>(
+		method: "GET" | "POST" | "PUT",
+		path: string,
+		body?: object,
+	): Promise<T> {
 		let response: Response;
 
 		try {

@@ -6,7 +6,7 @@ import {
 	UnauthorizedException,
 } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { and, count, eq, inArray, isNotNull, not } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, isNull, not } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { paymentTables } from "../db/schemas/payments.js";
 import { planTable } from "../db/schemas/plans.js";
@@ -18,6 +18,7 @@ import type { AsaasCycle } from "../payment/dto/asaas-subscription.dto.js";
 import { PaymentService } from "../payment/payment.service.js";
 import { SubscribeDTO } from "./dto/create-subscription.dto.js";
 import { type AsaasCharge, toPaymentRow } from "./payment-record.js";
+import { discountedPrice, MIN_CHARGE_CENTS, toAsaasDiscount } from "./promo-discount.js";
 import { matchSubscription } from "./subscription-match.js";
 
 // plans.billing_interval -> Asaas cycle. "MONTLY" is how the current Pro plan
@@ -69,7 +70,7 @@ export class SubscriptionService {
 		}
 
 		const discountCode = payload.discountCode?.trim().toUpperCase() || undefined;
-		const { newSubscription, coupon } = await this.db
+		const { newSubscription, promo } = await this.db
 			.transaction(async (tx) => {
 				const [newSubscription] = await tx
 					.insert(subscriptionTable)
@@ -80,7 +81,7 @@ export class SubscriptionService {
 					})
 					.returning();
 
-				if (!discountCode) return { newSubscription, coupon: null };
+				if (!discountCode) return { newSubscription, promo: null };
 
 				const [coupon] = await tx
 					.select()
@@ -92,12 +93,26 @@ export class SubscriptionService {
 					throw new BadRequestException("Invalid promotional code");
 				}
 
-				if (!coupon.isValid) {
+				if (!coupon.isValid || !coupon.discountType || coupon.discountValue <= 0) {
 					throw new BadRequestException("Discount code is invalid");
+				}
+
+				if (new Date(coupon.startsAt) > new Date()) {
+					throw new BadRequestException("Discount code is not active yet");
 				}
 
 				if (new Date(coupon.endsAt) < new Date()) {
 					throw new BadRequestException("Discount code is expired");
+				}
+
+				// Throwing here rolls the pending subscription back.
+				const priceWithDiscount = discountedPrice(
+					plann.price,
+					coupon.discountType,
+					coupon.discountValue,
+				);
+				if (priceWithDiscount < MIN_CHARGE_CENTS) {
+					throw new BadRequestException("Discount code cannot be applied to this plan");
 				}
 
 				if (coupon.maxRedemptionsGlobal !== null) {
@@ -143,7 +158,14 @@ export class SubscriptionService {
 					status: "PENDING",
 				});
 
-				return { newSubscription, coupon };
+				return {
+					newSubscription,
+					promo: {
+						discount: toAsaasDiscount(coupon.discountType, coupon.discountValue),
+						discountedPrice: priceWithDiscount,
+						cycles: coupon.durationInCicle,
+					},
+				};
 			})
 			.catch((error) => {
 				if (isUniqueViolation(error)) {
@@ -168,6 +190,9 @@ export class SubscriptionService {
 				cycle,
 				description: plann.name,
 				externalReference: newSubscription.id,
+				// The value stays the full price: Asaas applies the discount to each
+				// charge until endDiscountIfExhausted removes it.
+				...(promo ? { discount: promo.discount } : {}),
 			});
 
 			await this.db
@@ -191,6 +216,11 @@ export class SubscriptionService {
 				asaasSubscriptionId: asaasSubscription.id,
 				paymentMethod: payload.paymentMethod,
 				paymentUrl: firstPayment?.invoiceUrl ?? null,
+				// Prices in cents. The discounted one holds for `discountedCycles`
+				// charges, each only when paid by its due date.
+				originalPrice: plann.price,
+				discountedPrice: promo?.discountedPrice ?? null,
+				discountedCycles: promo?.cycles ?? null,
 			};
 		} catch (error) {
 			// Nothing was charged: drop the intent so the user can try again.
@@ -261,6 +291,17 @@ export class SubscriptionService {
 				.returning();
 
 			if (!activated) return false;
+
+			// The first payment is what turns a reserved promo code into a used one.
+			await tx
+				.update(promoCodeRedemptions)
+				.set({ status: "APPLIED", redeemedAt: new Date() })
+				.where(
+					and(
+						eq(promoCodeRedemptions.subscriptionId, activated.id),
+						eq(promoCodeRedemptions.status, "PENDING"),
+					),
+				);
 
 			const [plan] = await tx.select().from(planTable).where(eq(planTable.id, activated.plan_id));
 			const userPlan = planEnum.enumValues.find((value) => value === plan?.name.toUpperCase());
@@ -342,8 +383,79 @@ export class SubscriptionService {
 
 			await tx.update(userTable).set({ plan: "FREE" }).where(eq(userTable.id, ended.user_id));
 
+			// A revoked redemption no longer counts toward the limits of the code.
+			await tx
+				.update(promoCodeRedemptions)
+				.set({ status: "REVOKED" })
+				.where(
+					and(
+						eq(promoCodeRedemptions.subscriptionId, ended.id),
+						inArray(promoCodeRedemptions.status, ["PENDING", "APPLIED"]),
+					),
+				);
+
 			return true;
 		});
+	}
+
+	/**
+	 * Removes the promo discount from the Asaas subscription once every
+	 * discounted cycle was paid, so the next charges are the full price. Meant to
+	 * run after a paid charge was stored in `payments`. Returns false when there
+	 * is nothing to remove: no applied promo code, discount already removed, or
+	 * discounted cycles still left. An Asaas failure is thrown and nothing is
+	 * marked, so the next delivery of the event tries again.
+	 */
+	async endDiscountIfExhausted(
+		externalReference: string | null | undefined,
+		asaasSubscriptionId?: string | null,
+	): Promise<boolean> {
+		const match = matchSubscription(externalReference, asaasSubscriptionId);
+		if (!match) return false;
+
+		const [subscription] = await this.db
+			.select({
+				id: subscriptionTable.id,
+				asaasSubscriptionId: subscriptionTable.asaasSubscriptionId,
+			})
+			.from(subscriptionTable)
+			.where(match)
+			.limit(1);
+		if (!subscription?.asaasSubscriptionId) return false;
+
+		const [redemption] = await this.db
+			.select()
+			.from(promoCodeRedemptions)
+			.where(
+				and(
+					eq(promoCodeRedemptions.subscriptionId, subscription.id),
+					eq(promoCodeRedemptions.status, "APPLIED"),
+					isNull(promoCodeRedemptions.discountRemovedAt),
+				),
+			)
+			.limit(1);
+		if (!redemption?.discountType) return false;
+
+		// One row per charge, so a card's CONFIRMED + RECEIVED pair counts once.
+		const [paid] = await this.db
+			.select({ count: count() })
+			.from(paymentTables)
+			.where(
+				and(eq(paymentTables.subscriptionId, subscription.id), eq(paymentTables.status, "PAID")),
+			);
+		if ((paid?.count ?? 0) < redemption.durationInCicle) return false;
+
+		await this.paymentService.updateSubscription(subscription.asaasSubscriptionId, {
+			discount: { value: 0, dueDateLimitDays: 0, type: redemption.discountType },
+			updatePendingPayments: true,
+		});
+
+		await this.db
+			.update(promoCodeRedemptions)
+			.set({ discountRemovedAt: new Date() })
+			.where(eq(promoCodeRedemptions.id, redemption.id));
+
+		return true;
 	}
 
 	async listPlans() {

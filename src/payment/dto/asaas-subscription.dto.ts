@@ -9,6 +9,22 @@ export type AsaasCycle =
 	| "SEMIANNUALLY"
 	| "YEARLY";
 
+/** Discount Asaas grants to charges paid early enough. */
+export interface AsaasDiscount {
+	/** Percent (10 = 10%) or an amount in BRL, depending on `type`. */
+	value: number;
+	/** Days before the due date until which the discount holds; 0 = until the due date. */
+	dueDateLimitDays: number;
+	type: "FIXED" | "PERCENTAGE";
+}
+
+export interface UpdateAsaasSubscriptionInput {
+	/** A discount with `value: 0` removes the current one. */
+	discount?: AsaasDiscount;
+	/** Also applies the change to charges already generated and not yet paid. */
+	updatePendingPayments?: boolean;
+}
+
 export interface CreateAsaasSubscriptionInput {
 	/** Asaas customer id (`cus_...`). */
 	customer: string;
@@ -20,6 +36,8 @@ export interface CreateAsaasSubscriptionInput {
 	nextDueDate: string;
 	cycle: AsaasCycle;
 	description?: string;
+	/** Applied by Asaas to every charge until it is removed. */
+	discount?: AsaasDiscount;
 	/** Identifier of the subscription in our system. */
 	externalReference?: string;
 }

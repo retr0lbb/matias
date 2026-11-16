@@ -50,6 +50,9 @@ const buildSubscribeResult = (): SubscribeResult => ({
 	asaasSubscriptionId: "sub_fake_1",
 	paymentMethod: "PIX",
 	paymentUrl: "https://sandbox.asaas.example/i/fake_1",
+	originalPrice: 2990,
+	discountedPrice: null,
+	discountedCycles: null,
 });
 
 const buildPlans = (): PlanList => [

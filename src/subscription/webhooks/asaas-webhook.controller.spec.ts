@@ -21,6 +21,9 @@ const createSubscriptionServiceMock = () => ({
 	reactivatePastDue: vi.fn() as unknown as MockedFunction<SubscriptionService["reactivatePastDue"]>,
 	markPastDue: vi.fn() as unknown as MockedFunction<SubscriptionService["markPastDue"]>,
 	deactivate: vi.fn() as unknown as MockedFunction<SubscriptionService["deactivate"]>,
+	endDiscountIfExhausted: vi.fn() as unknown as MockedFunction<
+		SubscriptionService["endDiscountIfExhausted"]
+	>,
 });
 
 const createPaymentRecordServiceMock = () => ({
@@ -80,6 +83,7 @@ describe("AsaasWebhookController", () => {
 		subscriptionService.reactivatePastDue.mockResolvedValue(false);
 		subscriptionService.markPastDue.mockResolvedValue(true);
 		subscriptionService.deactivate.mockResolvedValue(true);
+		subscriptionService.endDiscountIfExhausted.mockResolvedValue(false);
 		paymentRecords = createPaymentRecordServiceMock();
 		paymentRecords.recordFromWebhook.mockResolvedValue(true);
 

@@ -13,12 +13,13 @@ The app sells paid plans through **Asaas**, a Brazilian payment provider. Two mo
 
 ## `src/payment`: the Asaas client
 
-`PaymentService` (`payment.service.ts`) has four public methods:
+`PaymentService` (`payment.service.ts`) has five public methods:
 
 | Method | What it does |
 |---|---|
 | `createCustomer` | Creates a customer on Asaas and returns it with its `cus_...` id. Asaas does not detect duplicates, so the caller must save and reuse that id. |
 | `createSubscription` | Creates a recurring subscription on Asaas (`sub_...`). Asaas then generates one charge per cycle. |
+| `updateSubscription` | Changes an existing Asaas subscription. Used to remove the promo discount once its cycles are over. |
 | `listSubscriptionPayments` | Lists the charges (`pay_...`) of a subscription. The first one exists right after creation. |
 | `isValidWebhookToken` | Checks the token Asaas sends on webhooks against `ASAAS_WEBHOOK_TOKEN`. If the variable is not set, every webhook is rejected. |
 
@@ -58,8 +59,10 @@ A user can have only one live subscription (`PENDING`, `ACTIVE` or `EXPIRED`) at
 1. Check the user, the plan and that there is no existing subscription to that plan.
 2. In one transaction, save the subscription as `PENDING` and, if a discount code was sent, validate it and record its use.
 3. Find or create the Asaas customer, reusing the `cus_...` id from an earlier subscription if there is one.
-4. Create the subscription on Asaas, sending our local subscription id as `externalReference`. That is how webhooks are later tied back to our row.
-5. Read the first charge, store it in `payments` as `PENDING`, and return its `paymentUrl` (the Asaas page where the user pays).
+4. Create the subscription on Asaas, sending our local subscription id as `externalReference`. That is how webhooks are later tied back to our row. With a discount code, the `value` is still the full plan price and the code goes in the Asaas `discount` object.
+5. Read the first charge, store it in `payments` as `PENDING`, and return its `paymentUrl` (the Asaas page where the user pays) plus `originalPrice`, `discountedPrice` and `discountedCycles` (cents; the last two are `null` without a code).
+
+A discount code is rejected (`400`) when it is not valid, has not started, has expired, reached its limits, or would bring the price below R$ 5,00 (the Asaas minimum). Details in [`promo-code-discount.md`](promo-code-discount.md).
 
 If step 3 or 4 fails, the local rows are deleted so the user can try again.
 
@@ -89,6 +92,8 @@ Finally, if the event carries a charge, `PaymentRecordService` updates the **`pa
 | `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED` | `REFUNDED` |
 | `PAYMENT_DELETED`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED` | `FAILED` |
 
+The events also move the **promo redemption** of the subscription: the first payment turns it from `PENDING` into `APPLIED`, and an event that ends the subscription turns it into `REVOKED` (it stops counting toward the limits of the code). After each paid event, once as many charges are `PAID` as the code has discounted cycles, the discount is removed from the Asaas subscription and `discount_removed_at` is set, so later charges are the full price.
+
 Asaas can deliver the same event twice or out of order, so every step is safe to repeat: activating twice does nothing the second time, and a charge never moves "backwards" (a refunded charge is not marked paid again).
 
 ## Things a newcomer should know
@@ -97,7 +102,8 @@ Asaas can deliver the same event twice or out of order, so every step is safe to
 - **Three Asaas ids:** `cus_...` (customer), `sub_...` (subscription) and `pay_...` (one charge). We store all three.
 - **Local testing needs a tunnel** (ngrok) so Asaas can reach the webhook, and the webhook must be subscribed to the events above in the Asaas panel.
 - **`GAP` tests:** some specs contain tests marked `GAP` that fail on purpose; they describe known bugs not yet fixed (mostly in `createSubscription`).
-- **Known open items (as of 2026-11-13):**
-  - Discount codes are recorded but Asaas is still charged the full price.
+- **Known open items (as of 2026-11-16):**
+  - The promo discount is an Asaas early-payment discount: a charge paid after its due date is the full price, and the first charge is due the day the user subscribes.
+  - `payments.value` keeps the value the charge was created with, not the discounted amount paid.
   - A refund does not cancel the subscription on Asaas.
   - Orphan subscriptions (created on Asaas, lost locally) are being worked on separately.
