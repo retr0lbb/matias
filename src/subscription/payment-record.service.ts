@@ -43,6 +43,7 @@ export class PaymentRecordService {
 	 * missing required data, or a status change that would go backwards.
 	 */
 	async recordFromWebhook(event: string, charge: WebhookCharge): Promise<boolean> {
+		console.log("SAVING FROM WEBHOOK");
 		// Object.hasOwn keeps inherited names such as "toString" from being read
 		// as tracked events.
 		const status = Object.hasOwn(STATUS_BY_EVENT, event) ? STATUS_BY_EVENT[event] : undefined;
