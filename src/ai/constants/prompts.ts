@@ -63,3 +63,37 @@ export function buildPrompt(props: PromptProps): string {
 
 	return sections.filter(Boolean).join("\n\n");
 }
+
+// --- Judge --------------------------------------------------------------
+
+export type JudgePromptProps = {
+	prompt: string;
+	history: { role: "USER" | "IA"; content: string | null }[];
+	/** False when the user already picked the model, so the judge skips routing. */
+	routeModel: boolean;
+};
+
+const JUDGE_ROUTING = `- The appropriate model tier.`;
+
+const JUDGE_ROUTING_RULES = `How to classify a message:
+- Simple message asking a question that might need retrieval: CHEAP
+- Longer message asking for directions, a plan, or advanced retrieval: NORMAL
+- Complex questions that need extensive tools, retrieval or advanced document generation: EXPENSIVE`;
+
+export function buildJudgePrompt(props: JudgePromptProps): string {
+	return [
+		`You are the routing judge for Matita AI.
+Analyze the conversation history and the latest user message.
+Generate the title in Brazilian Portuguese, with proper accents.
+You must determine:`,
+		props.routeModel ? JUDGE_ROUTING : null,
+		`- Whether document retrieval is necessary.
+- Which registered tools are required.
+- A short title IF and ONLY IF the history is empty.`,
+		props.routeModel ? JUDGE_ROUTING_RULES : null,
+		`{CONVERSATION_HISTORY}\n${JSON.stringify(props.history)}`,
+		`{USER_LATEST_MESSAGE}\n${props.prompt}`,
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}

@@ -9,21 +9,25 @@ import { InjectDrizzle } from "@nestjs/drizzle";
 import { desc, eq } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
-import { messagesTable } from "../db/schemas/message.js";
+import { type MessageMetadata, messagesTable } from "../db/schemas/message.js";
 import { userTable } from "../db/schemas/user.js";
 import { RagSearchResult, RagService } from "../rag/rag.service.js";
 import {
 	type QuotaExceededBody,
 	QuotaExceededException,
 } from "../usage/quota-exceeded.exception.js";
-import { UsageService } from "../usage/usage.service.js";
+import type { ThinkingLevelOption } from "../usage/plan-limits.js";
+import { type ChatAllowance, UsageService } from "../usage/usage.service.js";
 import { AIExpense, AiExpensesFactory } from "./ai.factory.js";
 import type { AIResponse } from "./ai-provider.type.js";
-import type { ChatStreamEvent } from "./dto/chat-stream-event.js";
-import { JudgeModel } from "./models/judge-model.js";
+import type { ChatOptions } from "./dto/chat-body.dto.js";
+import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js";
+import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
 
 const HISTORY_LIMIT = 20;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type History = { role: "USER" | "IA"; content: string | null }[];
 
 export interface ChatStreamContext {
 	user: typeof userTable.$inferSelect;
@@ -31,6 +35,18 @@ export interface ChatStreamContext {
 	conversation: { id: string; title: string | null };
 	/** RAG only runs when the client sent a conversationId (same rule as chat()). */
 	ragEnabled: boolean;
+	options: ChatOptions;
+	/** Plan limits and usage, loaded (and checked for MANUAL picks) before the stream starts. */
+	allowance: ChatAllowance;
+}
+
+/** Which model and thinking level a turn runs with, and why. */
+interface Turn {
+	model: AIExpense;
+	selection: ModelSelection;
+	downgradedFrom?: AIExpense;
+	thinkingLevel: ThinkingLevelOption;
+	judge: JudgeClassification;
 }
 
 @Injectable()
@@ -45,12 +61,19 @@ export class AiService {
 		private readonly judgeModel: JudgeModel,
 	) {}
 
-	async chat(prompt: string, loggedUser: string, conversationId?: string) {
+	async chat(
+		prompt: string,
+		loggedUser: string,
+		conversationId: string | undefined,
+		options: ChatOptions,
+	) {
 		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, loggedUser));
 
 		if (!user) {
 			throw new UnauthorizedException("User not authenticated properly");
 		}
+
+		const allowance = await this.loadAllowance(user, options);
 
 		let conversation: {
 			title: string | null;
@@ -112,12 +135,8 @@ export class AiService {
 				.limit(HISTORY_LIMIT)
 		).reverse();
 
-		const judgeResponse = await this.judgeModel.classify(prompt, history);
-
-		console.log("JUDGE RESPONSE =================");
-		console.log(judgeResponse);
-
-		await this.usageService.assertCanChat(user, judgeResponse.model);
+		const turn = await this.planTurn(prompt, history, options, allowance);
+		const judgeResponse = turn.judge;
 
 		if (judgeResponse.title && !conversation.title) {
 			await this.db
@@ -141,15 +160,16 @@ export class AiService {
 			content: prompt,
 		});
 
-		const provider = this.aiFactory.create(judgeResponse.model as AIExpense);
+		const provider = this.aiFactory.create(turn.model);
 
 		this.logger.log(`[RAG] retrieve=${judgeResponse.retrieve} conversationId=${conversationId}`);
 		const message = await provider.generate({
 			message: input,
+			thinkingLevel: turn.thinkingLevel,
 			prompt: {
 				needRetrieval: judgeResponse.retrieve,
 				needTools: false, // hard coded false
-				tier: judgeResponse.model as AIExpense,
+				tier: turn.model,
 				userInfo: user,
 				needDocumentGeneration: false,
 			},
@@ -159,10 +179,11 @@ export class AiService {
 			conversationId: conversation.id,
 			role: "IA",
 			content: message.output_text,
-			inputTokens: message.usage.total_input_tokens,
-			outputTokens: message.usage.total_tokens,
+			inputTokens: message.tokens.prompt,
+			outputTokens: message.tokens.output + message.tokens.thoughts,
 			interactionId: message.messageId,
-			expense: judgeResponse.model,
+			expense: turn.model,
+			metadata: this.buildMetadata(turn, message),
 		});
 
 		return message.output_text;
@@ -171,13 +192,17 @@ export class AiService {
 	async prepareStream(
 		prompt: string,
 		loggedUser: string,
-		conversationId?: string,
+		conversationId: string | undefined,
+		options: ChatOptions,
 	): Promise<ChatStreamContext> {
 		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, loggedUser));
 
 		if (!user) {
 			throw new UnauthorizedException("User not authenticated properly");
 		}
+
+		// Before any SSE header: a MANUAL pick over quota is a real HTTP 429.
+		const allowance = await this.loadAllowance(user, options);
 
 		let conversation: { id: string; userId: string; title: string | null };
 
@@ -226,6 +251,8 @@ export class AiService {
 			prompt,
 			conversation: { id: conversation.id, title: conversation.title },
 			ragEnabled: Boolean(conversationId),
+			options,
+			allowance,
 		};
 	}
 
@@ -239,8 +266,9 @@ export class AiService {
 		signal: AbortSignal,
 	): AsyncGenerator<ChatStreamEvent> {
 		let partial = "";
+		let partialThinking = "";
 		let final: AIResponse | undefined;
-		let model: AIExpense | undefined;
+		let turn: Turn | undefined;
 		let status: "COMPLETED" | "FAILED" | "ERROR" = "FAILED";
 
 		yield {
@@ -263,9 +291,8 @@ export class AiService {
 					.limit(HISTORY_LIMIT)
 			).reverse();
 
-			const judgeResponse = await this.judgeModel.classify(ctx.prompt, history);
-
-			await this.usageService.assertCanChat(ctx.user, judgeResponse.model);
+			turn = await this.planTurn(ctx.prompt, history, ctx.options, ctx.allowance);
+			const judgeResponse = turn.judge;
 
 			if (judgeResponse.title && !ctx.conversation.title) {
 				await this.db
@@ -290,27 +317,35 @@ export class AiService {
 				content: ctx.prompt,
 			});
 
-			model = judgeResponse.model as AIExpense;
-			const provider = this.aiFactory.create(model);
+			const provider = this.aiFactory.create(turn.model);
 
 			yield {
 				type: "status",
-				data: { stage: "generating", model, title: ctx.conversation.title },
+				data: {
+					stage: "generating",
+					model: turn.model,
+					title: ctx.conversation.title,
+					selection: turn.selection,
+					thinkingLevel: turn.thinkingLevel,
+					downgradedFrom: turn.downgradedFrom,
+				},
 			};
 			for await (const chunk of provider.generateStream({
 				message: input,
 				signal,
+				thinkingLevel: turn.thinkingLevel,
 				prompt: {
 					needDocumentGeneration: false,
 					needRetrieval: judgeResponse.retrieve,
 					needTools: false,
-					tier: judgeResponse.model as AIExpense,
+					tier: turn.model,
 				},
 			})) {
 				if (chunk.type === "text") {
 					partial += chunk.text;
 					yield { type: "text", data: { text: chunk.text } };
 				} else if (chunk.type === "thinking") {
+					partialThinking += chunk.text;
 					yield { type: "thinking", data: { text: chunk.text } };
 				} else {
 					final = chunk.response;
@@ -341,18 +376,76 @@ export class AiService {
 				yield { type: "error", data: { code: "GENERATION_FAILED", message: "Generation failed" } };
 			}
 		} finally {
-			if (model) {
-				await this.saveStreamedMessage(ctx, model, final?.output_text ?? partial, final, status);
+			if (turn) {
+				await this.saveStreamedMessage(
+					ctx,
+					turn,
+					final?.output_text ?? partial,
+					final,
+					status,
+					partialThinking,
+				);
 			}
 		}
 	}
 
+	/**
+	 * Loads limits/usage once and rejects up front (before any conversation or
+	 * SSE header) a thinking level the plan doesn't include (403) or a MANUAL
+	 * model with no quota left (429).
+	 */
+	private async loadAllowance(user: { id: string; cycleAnchorAt: Date }, options: ChatOptions) {
+		const allowance = await this.usageService.getChatAllowance(user);
+
+		// CHEAP always runs at MINIMAL, so the requested level doesn't matter there.
+		if (options.model !== "CHEAP") {
+			this.usageService.assertThinkingLevelAllowed(allowance, options.thinkingLevel);
+		}
+
+		if (options.model !== "AUTO") {
+			this.usageService.assertCanChat(allowance, options.model);
+		}
+
+		return allowance;
+	}
+
+	/**
+	 * Runs the judge and settles the model. AUTO lets the judge pick and
+	 * downgrades when that tier has no quota left; MANUAL picks and the
+	 * thinking level were already checked in `loadAllowance`.
+	 */
+	private async planTurn(
+		prompt: string,
+		history: History,
+		options: ChatOptions,
+		allowance: ChatAllowance,
+	): Promise<Turn> {
+		const thinking = { thinkingLevel: options.thinkingLevel };
+
+		if (options.model !== "AUTO") {
+			const judge = await this.judgeModel.classify({ prompt, history, routeModel: false });
+			return { model: AIExpense[options.model], selection: "MANUAL", judge, ...thinking };
+		}
+
+		const judge = await this.judgeModel.classify({ prompt, history, routeModel: true });
+		const choice = this.usageService.pickAvailableModel(allowance, judge.model);
+
+		return {
+			model: AIExpense[choice.model],
+			selection: "AUTO",
+			downgradedFrom: choice.downgradedFrom && AIExpense[choice.downgradedFrom],
+			judge,
+			...thinking,
+		};
+	}
+
 	private async saveStreamedMessage(
 		ctx: ChatStreamContext,
-		model: AIExpense,
+		turn: Turn,
 		content: string,
 		final: AIResponse | undefined,
 		status: "COMPLETED" | "FAILED" | "ERROR",
+		partialThinking: string,
 	): Promise<void> {
 		if (content.length === 0) {
 			return;
@@ -363,11 +456,12 @@ export class AiService {
 				conversationId: ctx.conversation.id,
 				role: "IA",
 				content,
-				inputTokens: final?.usage.total_input_tokens ?? 0,
-				outputTokens: final?.usage.total_tokens ?? 0,
+				inputTokens: final?.tokens.prompt ?? 0,
+				outputTokens: final ? final.tokens.output + final.tokens.thoughts : 0,
 				interactionId: final?.messageId || null,
-				expense: model,
+				expense: turn.model,
 				status,
+				metadata: this.buildMetadata(turn, final, partialThinking),
 			});
 		} catch (error) {
 			this.logger.error(
@@ -375,6 +469,40 @@ export class AiService {
 				error,
 			);
 		}
+	}
+
+	/**
+	 * Metadata for an IA message. Without `final` (aborted/failed stream) only the
+	 * turn decisions, judge usage and any partial thinking text are known.
+	 */
+	private buildMetadata(
+		turn: Turn,
+		final: AIResponse | undefined,
+		partialThinking?: string,
+	): MessageMetadata {
+		const thinking = final?.thinking_output ?? (partialThinking || undefined);
+		const decided: MessageMetadata = {
+			tier: turn.model,
+			selection: turn.selection,
+			downgradedFrom: turn.downgradedFrom,
+			thinkingOption: turn.thinkingLevel,
+			judge: turn.judge.usage,
+		};
+
+		if (!final) {
+			return { ...decided, thinking };
+		}
+
+		return {
+			...decided,
+			modelName: final.modelName,
+			modelId: final.model,
+			thinkingLevel: final.thinkingLevel,
+			finishReason: final.status,
+			latencyMs: Date.parse(final.updated) - Date.parse(final.created),
+			tokens: final.tokens,
+			thinking,
+		};
 	}
 
 	private async retrieveContext(prompt: string, userId: string, conversationId: string) {

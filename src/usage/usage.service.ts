@@ -1,51 +1,101 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { and, count, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
 import { messageExpenseEnum, messagesTable } from "../db/schemas/message.js";
+import { planTable } from "../db/schemas/plans.js";
 import { ragDocumentsTable } from "../db/schemas/rag-document.js";
-import type { Plan, User } from "../db/schemas/user.js";
-import { getCurrentCycle, type BillingCycle } from "./billing-cycle.js";
-import { PLAN_LIMITS } from "./plans.js";
-import { QuotaExceededException } from "./quota-exceeded.exception.js";
+import { subscriptionTable } from "../db/schemas/subscriptions.js";
+import type { User } from "../db/schemas/user.js";
+import { getCycle, type BillingCycle } from "./billing-cycle.js";
+import { PlanRestrictionException } from "./plan-restriction.exception.js";
+import {
+  FREE_PLAN_SLUG,
+  isThinkingLevelAllowed,
+  planLimitsSchema,
+  type PlanLimits,
+  type ThinkingLevelOption,
+  type UsageCycleKind,
+} from "./plan-limits.js";
+import { type QuotaCode, QuotaExceededException } from "./quota-exceeded.exception.js";
 
 export type MessageExpense = (typeof messageExpenseEnum.enumValues)[number];
 
 /** The user fields quota checks need. */
-export type UsageSubject = Pick<User, "id" | "plan" | "cycleAnchorAt">;
+export type UsageSubject = Pick<User, "id" | "cycleAnchorAt">;
 
 /** The database or an open transaction. */
 export type DbExecutor = Pick<NodePgDatabase, "select" | "execute">;
 
-const ADVANCED_EXPENSES: MessageExpense[] = ["NORMAL", "EXPENSIVE"];
-const MB = 1024 * 1024;
+export interface ResolvedPlan {
+  id: string;
+  slug: string;
+  name: string;
+  limits: PlanLimits;
+}
+
+/** Everything a chat turn needs to check and pick a model, loaded once. */
+export interface ChatAllowance {
+  plan: ResolvedPlan;
+  cycle: BillingCycle;
+  used: Record<MessageExpense, number>;
+}
+
+export interface ModelChoice {
+  model: MessageExpense;
+  /** Set when AUTO wanted a bigger model that had no quota left. */
+  downgradedFrom?: MessageExpense;
+}
+
+type Counter = { used: number; limit: number | null };
 
 export interface UsageSummary {
-  plan: Plan;
-  cycle: { start: string; resetsAt: string };
-  uploads: { used: number; limit: number | null };
+  plan: { slug: string; name: string };
+  cycle: { kind: UsageCycleKind; start: string; resetsAt: string };
+  uploads: Counter;
   storage: { usedBytes: number; limitBytes: number | null };
   maxFileBytes: number;
-  advancedMessages: { used: number; limit: number | null };
+  messages: { cheap: Counter; normal: Counter; expensive: Counter };
+  maxThinkingLevel: ThinkingLevelOption;
 }
+
+// A subscription still grants its plan while payment is overdue (EXPIRED).
+const LIVE_STATUSES: ("ACTIVE" | "EXPIRED")[] = ["ACTIVE", "EXPIRED"];
+// Biggest first: AUTO downgrades along this list.
+const MODELS_BY_COST: MessageExpense[] = ["EXPENSIVE", "NORMAL", "CHEAP"];
+const MODEL_LABEL: Record<MessageExpense, string> = {
+  CHEAP: "Default",
+  NORMAL: "Expert",
+  EXPENSIVE: "Doctor",
+};
+const THINKING_LABEL: Record<ThinkingLevelOption, string> = {
+  DEFAULT: "Default",
+  HIGH: "High",
+  ULTRA_HIGH: "Ultra High",
+};
+const MB = 1024 * 1024;
 
 @Injectable()
 export class UsageService {
+  private readonly logger = new Logger(UsageService.name);
+
   constructor(@InjectDrizzle() private readonly db: NodePgDatabase) {}
 
   async getUsage(user: UsageSubject): Promise<UsageSummary> {
-    const limits = PLAN_LIMITS[user.plan];
-    const cycle = this.cycleFor(user);
+    const plan = await this.resolvePlan(this.db, user.id);
+    const { limits } = plan;
+    const cycle = this.cycleFor(user, limits.cycle);
 
-    const [documents, advancedMessages] = await Promise.all([
+    const [documents, used] = await Promise.all([
       this.countDocuments(this.db, user.id, cycle),
-      this.countAdvancedMessages(user.id, cycle),
+      this.countMessagesByExpense(user.id, cycle),
     ]);
 
     return {
-      plan: user.plan,
+      plan: { slug: plan.slug, name: plan.name },
       cycle: {
+        kind: limits.cycle,
         start: cycle.start.toISOString(),
         resetsAt: cycle.resetsAt.toISOString(),
       },
@@ -55,11 +105,55 @@ export class UsageService {
         limitBytes: limits.storageBytes,
       },
       maxFileBytes: limits.maxFileBytes,
-      advancedMessages: {
-        used: advancedMessages,
-        limit: limits.advancedMessagesPerCycle,
+      messages: {
+        cheap: { used: used.CHEAP, limit: limits.messagesPerCycle.cheap },
+        normal: { used: used.NORMAL, limit: limits.messagesPerCycle.normal },
+        expensive: { used: used.EXPENSIVE, limit: limits.messagesPerCycle.expensive },
       },
+      maxThinkingLevel: limits.maxThinkingLevel,
     };
+  }
+
+  /**
+   * The plan of the user's live subscription (ACTIVE or EXPIRED), or the free
+   * plan when there is none. Limits are validated because they are edited by hand.
+   */
+  async resolvePlan(executor: DbExecutor, userId: string): Promise<ResolvedPlan> {
+    const columns = {
+      id: planTable.id,
+      slug: planTable.slug,
+      name: planTable.name,
+      limits: planTable.limits,
+    };
+
+    const [subscribed] = await executor
+      .select(columns)
+      .from(subscriptionTable)
+      .innerJoin(planTable, eq(subscriptionTable.plan_id, planTable.id))
+      .where(
+        and(
+          eq(subscriptionTable.user_id, userId),
+          inArray(subscriptionTable.status, LIVE_STATUSES),
+        ),
+      )
+      .limit(1);
+
+    const [row] = subscribed
+      ? [subscribed]
+      : await executor.select(columns).from(planTable).where(eq(planTable.slug, FREE_PLAN_SLUG)).limit(1);
+
+    if (!row) {
+      this.logger.error(`No plan row with slug "${FREE_PLAN_SLUG}"`);
+      throw new InternalServerErrorException("Plan configuration is missing");
+    }
+
+    const parsed = planLimitsSchema.safeParse(row.limits);
+    if (!parsed.success) {
+      this.logger.error(`Invalid limits for plan "${row.slug}"`, parsed.error);
+      throw new InternalServerErrorException("Plan configuration is invalid");
+    }
+
+    return { id: row.id, slug: row.slug, name: row.name, limits: parsed.data };
   }
 
   /**
@@ -77,7 +171,7 @@ export class UsageService {
     user: UsageSubject,
     sizeBytes: number,
   ): Promise<void> {
-    const limits = PLAN_LIMITS[user.plan];
+    const { limits } = await this.resolvePlan(executor, user.id);
 
     if (sizeBytes > limits.maxFileBytes) {
       throw new QuotaExceededException({
@@ -93,7 +187,7 @@ export class UsageService {
       return;
     }
 
-    const cycle = this.cycleFor(user);
+    const cycle = this.cycleFor(user, limits.cycle);
     const { uploads, storageBytes } = await this.countDocuments(
       executor,
       user.id,
@@ -103,7 +197,7 @@ export class UsageService {
     if (limits.uploadsPerCycle !== null && uploads >= limits.uploadsPerCycle) {
       throw new QuotaExceededException({
         code: "UPLOADS_PER_CYCLE",
-        message: `You've used all ${limits.uploadsPerCycle} file uploads for this month. Your limit resets on ${formatDay(cycle.resetsAt)}.`,
+        message: `You've used all ${limits.uploadsPerCycle} file uploads for ${cycleWord(limits.cycle)}. Your limit resets on ${formatDay(cycle.resetsAt)}.`,
         limit: limits.uploadsPerCycle,
         used: uploads,
         resetsAt: cycle.resetsAt,
@@ -124,35 +218,75 @@ export class UsageService {
     }
   }
 
-  async assertCanChat(
-    user: UsageSubject,
-    expense: MessageExpense,
-  ): Promise<void> {
-    if (!ADVANCED_EXPENSES.includes(expense)) {
-      return;
+  async getChatAllowance(user: UsageSubject): Promise<ChatAllowance> {
+    const plan = await this.resolvePlan(this.db, user.id);
+    const cycle = this.cycleFor(user, plan.limits.cycle);
+    const used = await this.countMessagesByExpense(user.id, cycle);
+
+    return { plan, cycle, used };
+  }
+
+  /** Throws when the user explicitly picked a model with no quota left. */
+  assertCanChat(allowance: ChatAllowance, expense: MessageExpense): void {
+    if (!this.hasQuota(allowance, expense)) {
+      throw this.messageQuotaError(allowance, expense);
     }
+  }
 
-    const limit = PLAN_LIMITS[user.plan].advancedMessagesPerCycle;
-    if (limit === null) {
-      return;
-    }
+  /** Throws when the plan doesn't include the requested thinking level. */
+  assertThinkingLevelAllowed(allowance: ChatAllowance, requested: ThinkingLevelOption): void {
+    const allowed = allowance.plan.limits.maxThinkingLevel;
 
-    const cycle = this.cycleFor(user);
-    const used = await this.countAdvancedMessages(user.id, cycle);
-
-    if (used >= limit) {
-      throw new QuotaExceededException({
-        code: "ADVANCED_MESSAGES",
-        message: `You've used all ${limit} advanced AI messages for this month. You can keep chatting with the standard model, and your limit resets on ${formatDay(cycle.resetsAt)}.`,
-        limit,
-        used,
-        resetsAt: cycle.resetsAt,
+    if (!isThinkingLevelAllowed(requested, allowed)) {
+      throw new PlanRestrictionException({
+        code: "THINKING_LEVEL_NOT_ALLOWED",
+        message: `Your plan includes thinking up to ${THINKING_LABEL[allowed]}. Choose a lower thinking level or upgrade your plan to use ${THINKING_LABEL[requested]}.`,
+        requested,
+        allowed,
       });
     }
   }
 
-  private cycleFor(user: UsageSubject): BillingCycle {
-    return getCurrentCycle(user.cycleAnchorAt, new Date());
+  /**
+   * AUTO mode: `preferred` if it has quota, else the next cheaper model that
+   * does. Throws when not even the cheapest model has quota left.
+   */
+  pickAvailableModel(allowance: ChatAllowance, preferred: MessageExpense): ModelChoice {
+    const candidates = MODELS_BY_COST.slice(MODELS_BY_COST.indexOf(preferred));
+    const model = candidates.find((candidate) => this.hasQuota(allowance, candidate));
+
+    if (!model) {
+      throw this.messageQuotaError(allowance, "CHEAP");
+    }
+
+    return model === preferred ? { model } : { model, downgradedFrom: preferred };
+  }
+
+  private messageQuotaError(
+    allowance: ChatAllowance,
+    expense: MessageExpense,
+  ): QuotaExceededException {
+    const { limits } = allowance.plan;
+    const limit = messageLimit(limits, expense) ?? 0;
+    const fallback =
+      expense === "CHEAP" ? "" : " You can keep chatting with another model or let Auto choose.";
+
+    return new QuotaExceededException({
+      code: QUOTA_CODE[expense],
+      message: `You've used all ${limit} ${MODEL_LABEL[expense]} messages for ${cycleWord(limits.cycle)}.${fallback} Your limit resets on ${formatDay(allowance.cycle.resetsAt)}.`,
+      limit,
+      used: allowance.used[expense],
+      resetsAt: allowance.cycle.resetsAt,
+    });
+  }
+
+  private hasQuota(allowance: ChatAllowance, expense: MessageExpense): boolean {
+    const limit = messageLimit(allowance.plan.limits, expense);
+    return limit === null || allowance.used[expense] < limit;
+  }
+
+  private cycleFor(user: UsageSubject, kind: UsageCycleKind): BillingCycle {
+    return getCycle(kind, user.cycleAnchorAt, new Date());
   }
 
   // FAILED documents were never usable, so they don't count against the user.
@@ -180,12 +314,19 @@ export class UsageService {
     };
   }
 
-  private async countAdvancedMessages(
+  private async countMessagesByExpense(
     userId: string,
     cycle: BillingCycle,
-  ): Promise<number> {
+  ): Promise<Record<MessageExpense, number>> {
+    const countOf = (expense: MessageExpense) =>
+      sql<number>`count(*) filter (where ${eq(messagesTable.expense, expense)})`.mapWith(Number);
+
     const [row] = await this.db
-      .select({ used: count() })
+      .select({
+        CHEAP: countOf("CHEAP"),
+        NORMAL: countOf("NORMAL"),
+        EXPENSIVE: countOf("EXPENSIVE"),
+      })
       .from(messagesTable)
       .innerJoin(
         conversationsTable,
@@ -195,13 +336,31 @@ export class UsageService {
         and(
           eq(conversationsTable.userId, userId),
           eq(messagesTable.role, "IA"),
-          inArray(messagesTable.expense, ADVANCED_EXPENSES),
           gte(messagesTable.createdAt, cycle.start),
         ),
       );
 
-    return row?.used ?? 0;
+    return {
+      CHEAP: row?.CHEAP ?? 0,
+      NORMAL: row?.NORMAL ?? 0,
+      EXPENSIVE: row?.EXPENSIVE ?? 0,
+    };
   }
+}
+
+const QUOTA_CODE: Record<MessageExpense, QuotaCode> = {
+  CHEAP: "CHEAP_MESSAGES",
+  NORMAL: "NORMAL_MESSAGES",
+  EXPENSIVE: "EXPENSIVE_MESSAGES",
+};
+
+function messageLimit(limits: PlanLimits, expense: MessageExpense): number | null {
+  const key = expense.toLowerCase() as keyof PlanLimits["messagesPerCycle"];
+  return limits.messagesPerCycle[key];
+}
+
+function cycleWord(kind: UsageCycleKind): string {
+  return kind === "WEEKLY" ? "this week" : "this month";
 }
 
 function formatMb(bytes: number): number {

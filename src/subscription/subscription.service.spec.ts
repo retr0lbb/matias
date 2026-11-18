@@ -209,7 +209,6 @@ const buildUser = (overrides: Partial<User> = {}): User => ({
 	passwordHash: "hashed-password",
 	loginProvider: "LOCAL",
 	googleSubject: null,
-	plan: "FREE",
 	createdAt: new Date("2026-01-01T00:00:00.000Z"),
 	cycleAnchorAt: new Date("2026-01-01T00:00:00.000Z"),
 	...overrides,
@@ -217,6 +216,7 @@ const buildUser = (overrides: Partial<User> = {}): User => ({
 
 const buildPlan = (overrides: Partial<PlanRow> = {}): PlanRow => ({
 	id: PLAN_ID,
+	slug: "pro",
 	name: "Pro",
 	description: null,
 	price: 2990,
@@ -2055,22 +2055,14 @@ describe("SubscriptionService", () => {
 			await expect(service.activateFromPayment(SUBSCRIPTION_ID.toUpperCase())).resolves.toBe(true);
 		});
 
-		it("should move the user to the plan and restart the usage cycle now", async () => {
+		it("should restart the user's usage cycle now", async () => {
 			arrangeActivation();
 
 			await service.activateFromPayment(SUBSCRIPTION_ID);
 
 			const [update] = db.ran("update", userTable);
-			expect(update?.set).toEqual({ plan: "PRO", cycleAnchorAt: NOW });
+			expect(update?.set).toEqual({ cycleAnchorAt: NOW });
 			expect(whereParams(update)).toEqual([USER_ID]);
-		});
-
-		it("should read the plan of the activated subscription", async () => {
-			arrangeActivation();
-
-			await service.activateFromPayment(SUBSCRIPTION_ID);
-
-			expect(whereParams(db.ran("select", planTable)[0])).toEqual([PLAN_ID]);
 		});
 
 		it("should run every write inside one transaction", async () => {
@@ -2084,19 +2076,6 @@ describe("SubscriptionService", () => {
 		});
 
 		it.each([
-			["Pro", "PRO"],
-			["pro", "PRO"],
-			["PRO", "PRO"],
-			["Free", "FREE"],
-		])("should map the plan named '%s' to the %s user plan", async (name, plan) => {
-			arrangeActivation(buildPlan({ name }));
-
-			await service.activateFromPayment(SUBSCRIPTION_ID);
-
-			expect(db.ran("update", userTable)[0]?.set).toMatchObject({ plan });
-		});
-
-		it.each([
 			["there is no PENDING subscription with that id", []],
 			["the subscription was already activated", []],
 		])("should return false and leave the user untouched when %s", async (_label, rows) => {
@@ -2104,38 +2083,6 @@ describe("SubscriptionService", () => {
 			db.on("update", subscriptionTable).mockResolvedValue(rows);
 
 			await expect(service.activateFromPayment(SUBSCRIPTION_ID)).resolves.toBe(false);
-
-			expect(db.ran("select", planTable)).toHaveLength(0);
-			expect(db.ran("update", userTable)).toHaveLength(0);
-		});
-
-		// GAP: the subscription becomes ACTIVE but the user silently stays on the
-		// old plan when the plan name is not one of the user plan enum values
-		// ("Pro Anual", "Enterprise", " Pro").
-		it.each(["Enterprise", "Pro Anual", " Pro", ""])(
-			"should not report an activation when the plan named '%s' maps to no user plan",
-			async (name) => {
-				arrangeActivation(buildPlan({ name }));
-
-				const result = await service.activateFromPayment(SUBSCRIPTION_ID).catch(() => "rejected");
-
-				expect(result).not.toBe(true);
-			},
-		);
-
-		// GAP: same silent half-activation when the plan row is gone.
-		it("should not report an activation when the plan of the subscription no longer exists", async () => {
-			arrangeActivation(undefined);
-
-			const result = await service.activateFromPayment(SUBSCRIPTION_ID).catch(() => "rejected");
-
-			expect(result).not.toBe(true);
-		});
-
-		it("should not update the user when the plan maps to no user plan", async () => {
-			arrangeActivation(buildPlan({ name: "Enterprise" }));
-
-			await service.activateFromPayment(SUBSCRIPTION_ID).catch(() => undefined);
 
 			expect(db.ran("update", userTable)).toHaveLength(0);
 		});
@@ -2206,16 +2153,6 @@ describe("SubscriptionService", () => {
 			await expect(service.activateFromPayment(SUBSCRIPTION_ID)).rejects.toBe(failure);
 
 			await expect(db.transaction.mock.results[0]?.value).rejects.toBe(failure);
-		});
-
-		it("should reject so the transaction rolls back when reading the plan fails", async () => {
-			arrangeActivation();
-			const failure = new Error("connection terminated");
-			db.on("select", planTable).mockRejectedValue(failure);
-
-			await expect(service.activateFromPayment(SUBSCRIPTION_ID)).rejects.toBe(failure);
-
-			expect(db.ran("update", userTable)).toHaveLength(0);
 		});
 
 		it("should reject when activating the subscription fails", async () => {

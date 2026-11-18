@@ -24,7 +24,6 @@ const buildUser = (overrides: Partial<User> = {}): User => ({
 	passwordHash: "hashed-password",
 	loginProvider: "LOCAL",
 	googleSubject: null,
-	plan: "FREE",
 	createdAt: new Date("2026-01-01T00:00:00.000Z"),
 	cycleAnchorAt: new Date("2026-01-01T00:00:00.000Z"),
 	...overrides,
@@ -58,6 +57,7 @@ const buildSubscribeResult = (): SubscribeResult => ({
 const buildPlans = (): PlanList => [
 	{
 		id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		slug: "pro",
 		name: "Pro",
 		description: null,
 		price: 2990,

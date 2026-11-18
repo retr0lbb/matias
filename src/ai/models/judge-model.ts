@@ -1,128 +1,93 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { JudgeReponse, judgeReponseSchema } from "../dto/judge-response.dto.js";
+import type { JudgeMetadata } from "../../db/schemas/message.js";
+import { buildJudgePrompt, type JudgePromptProps } from "../constants/prompts.js";
+import {
+	JUDGE_MODELS,
+	type JudgeReponse,
+	judgeReponseSchema,
+	type RoutedJudgeReponse,
+	routedJudgeReponseSchema,
+	TOOL_NAMES,
+} from "../dto/judge-response.dto.js";
+import { toTokenUsage } from "./gemini-response.js";
+
+const JUDGE_MODEL = "gemini-3.1-flash-lite";
+
+type History = JudgePromptProps["history"];
+
+/** Judge decision plus the judge call's own usage, persisted in message metadata. */
+export type JudgeClassification = JudgeReponse & { usage: JudgeMetadata };
+export type RoutedJudgeClassification = RoutedJudgeReponse & { usage: JudgeMetadata };
 
 @Injectable()
 export class JudgeModel {
+	private readonly logger = new Logger(JudgeModel.name);
 	private readonly client: GoogleGenAI;
 
 	constructor(private readonly configService: ConfigService) {
-		const key = this.configService.getOrThrow<string>("GEMINI_API_KEY");
-		console.log("gemini key:", key.slice(0, 6), "...", key.slice(-4));
 		this.client = new GoogleGenAI({
-			apiKey: key,
+			apiKey: this.configService.getOrThrow<string>("GEMINI_API_KEY"),
 		});
 	}
 
+	/**
+	 * Decides retrieval, tools and the conversation title. With `routeModel`
+	 * (AUTO mode) it also picks the model tier; otherwise the user already chose it.
+	 */
+	classify(input: { prompt: string; history: History; routeModel: true }): Promise<RoutedJudgeClassification>;
+	classify(input: { prompt: string; history: History; routeModel: false }): Promise<JudgeClassification>;
 	async classify(
-		prompt: string,
-		history: { role: "USER" | "IA"; content: string | null }[],
-	): Promise<JudgeReponse> {
-		const totalStart = performance.now();
-		const timings: Record<string, number> = {};
+		input: JudgePromptProps,
+	): Promise<JudgeClassification | RoutedJudgeClassification> {
+		const startedAt = performance.now();
 
-		let interaction: Awaited<ReturnType<typeof this.client.models.generateContent>> | undefined;
+		const response = await this.client.models.generateContent({
+			model: JUDGE_MODEL,
+			contents: buildJudgePrompt(input),
+			config: {
+				thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+				responseMimeType: "application/json",
+				responseJsonSchema: responseSchema(input.routeModel),
+			},
+		});
 
-		try {
-			// 1. Preparação do prompt
-			let start = performance.now();
+		const latencyMs = Math.round(performance.now() - startedAt);
 
-			const contents = `
-				You are the routing judge for Matita AI.
-				Analyze the conversation history and the latest user message.
-				Generate the title in Brazilian Portuguese, with proper accents
-				You must determine:
-				- The appropriate model tier.
-				- Whether document retrieval is necessary.
-				- Which registered tools are required.
-				- Generate a small title IF and ONLY IF history is empty.
-
-				how to classify a message:
-				- simple message asking a questions that might need retrieval: CHEAP MODEL
-				- longer message asking for directions or to make a plan or that needs advanced retrieval: NORMAL MODEL
-				- Questions that are complex and needs extensive tools, retrieval or advanced document generation: EXPENSIVE MODEL
-				
-				{CONVERSATION_HISTORY}
-				${JSON.stringify(history)}
-				
-				{USER_LATEST_MESSAGE}
-				${prompt}
-			`;
-
-			timings.promptBuild = performance.now() - start;
-
-			// 2. Requisição Gemini
-			start = performance.now();
-
-			interaction = await this.client.models.generateContent({
-				model: "gemini-3.1-flash-lite",
-				contents,
-				config: {
-					thinkingConfig: {
-						thinkingLevel: ThinkingLevel.MINIMAL,
-						includeThoughts: true,
-					},
-					responseMimeType: "application/json",
-					responseJsonSchema: {
-						type: "object",
-						properties: {
-							model: {
-								type: "string",
-								enum: ["CHEAP", "NORMAL", "EXPENSIVE"],
-							},
-							retrieve: {
-								type: "boolean",
-							},
-							tools: {
-								type: "array",
-								items: {
-									type: "string",
-									enum: [
-										"classroom.list_classrooms",
-										"classroom.list_students",
-										"classroom.get_assignments",
-									],
-								},
-							},
-							title: {
-								type: "string",
-							},
-						},
-						required: ["model", "retrieve", "tools"],
-					},
-				},
-			});
-
-			timings.geminiRequest = performance.now() - start;
-
-			// 3. Parsing JSON
-			start = performance.now();
-
-			if (!interaction.text) {
-				throw new Error("Gemini returned an empty response");
-			}
-
-			const parsed = JSON.parse(interaction.text);
-
-			timings.jsonParsing = performance.now() - start;
-
-			// 4. Validação Zod
-			start = performance.now();
-
-			const result = judgeReponseSchema.parse(parsed);
-
-			timings.zodValidation = performance.now() - start;
-
-			return result;
-		} finally {
-			timings.total = performance.now() - totalStart;
-
-			console.log("[JUDGE PERFORMANCE]", {
-				timings,
-				usage: interaction?.usageMetadata,
-				modelVersion: interaction?.modelVersion,
-			});
+		if (!response.text) {
+			throw new Error("Judge returned an empty response");
 		}
+
+		const schema = input.routeModel ? routedJudgeReponseSchema : judgeReponseSchema;
+		const result = schema.parse(JSON.parse(response.text));
+
+		const usage: JudgeMetadata = {
+			modelId: response.modelVersion ?? JUDGE_MODEL,
+			latencyMs,
+			tokens: toTokenUsage(response.usageMetadata),
+		};
+
+		this.logger.debug(
+			`[JUDGE] ${latencyMs}ms tokens=${usage.tokens.total} route=${input.routeModel} result=${JSON.stringify(result)}`,
+		);
+
+		return { ...result, usage };
 	}
+}
+
+function responseSchema(routeModel: boolean) {
+	const properties: Record<string, unknown> = {
+		retrieve: { type: "boolean" },
+		tools: { type: "array", items: { type: "string", enum: [...TOOL_NAMES] } },
+		title: { type: "string" },
+	};
+	const required = ["retrieve", "tools"];
+
+	if (routeModel) {
+		properties.model = { type: "string", enum: [...JUDGE_MODELS] };
+		required.unshift("model");
+	}
+
+	return { type: "object", properties, required };
 }

@@ -1,16 +1,10 @@
 import { Authenticate, CurrentUser } from "@nestjs/authentication";
 import { Body, Controller, Logger, Post, Query, Res } from "@nestjs/common";
 import type { Response } from "express";
-import { z } from "zod";
 import type { User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
 import { AiService } from "./ai.service.js";
-
-const chatBodySchema = z.object({
-	prompt: z.string(),
-});
-
-type ChatBody = z.infer<typeof chatBodySchema>;
+import { type ChatBody, chatBodySchema } from "./dto/chat-body.dto.js";
 
 @Controller("ai/chat")
 export class AiController {
@@ -27,7 +21,7 @@ export class AiController {
 		@CurrentUser() user: User,
 		@Query("conversationId") conversationId: string,
 	) {
-		return this.aiService.chat(body.prompt, user.id, conversationId);
+		return this.aiService.chat(body.prompt, user.id, conversationId, body);
 	}
 
 	@Authenticate({ verifiedEmail: true })
@@ -40,7 +34,7 @@ export class AiController {
 	): Promise<void> {
 		// Runs before any SSE header is sent, so auth/validation/permission
 		// errors still reach the client as normal HTTP statuses.
-		const ctx = await this.aiService.prepareStream(body.prompt, user.id, conversationId);
+		const ctx = await this.aiService.prepareStream(body.prompt, user.id, conversationId, body);
 
 		const abort = new AbortController();
 		res.on("close", () => {

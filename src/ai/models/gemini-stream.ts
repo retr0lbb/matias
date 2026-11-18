@@ -1,5 +1,6 @@
 import type { GenerateContentResponse } from "@google/genai";
 import type { AIStreamChunk } from "../ai-provider.type.js";
+import { toTokenUsage } from "./gemini-response.js";
 
 /**
  * Turns a Gemini `generateContentStream` result into provider-agnostic chunks.
@@ -8,7 +9,7 @@ import type { AIStreamChunk } from "../ai-provider.type.js";
  */
 export async function* mapGeminiStream(
 	stream: AsyncGenerator<GenerateContentResponse>,
-	fallbackModel: string,
+	config: { modelName: string; thinkingLevel: string },
 	startedAt: Date,
 ): AsyncGenerator<AIStreamChunk> {
 	let outputText = "";
@@ -45,7 +46,9 @@ export async function* mapGeminiStream(
 		type: "done",
 		response: {
 			messageId: responseId ?? "",
-			model: modelVersion ?? fallbackModel,
+			model: modelVersion ?? config.modelName,
+			modelName: config.modelName,
+			thinkingLevel: config.thinkingLevel,
 			status: finishReason ?? "UNKNOWN",
 			created: startedAt.toISOString(),
 			updated: new Date().toISOString(),
@@ -55,6 +58,7 @@ export async function* mapGeminiStream(
 				total_input_tokens: usage?.promptTokenCount ?? 0,
 				total_tokens: usage?.totalTokenCount ?? 0,
 			},
+			tokens: toTokenUsage(usage),
 		},
 	};
 }

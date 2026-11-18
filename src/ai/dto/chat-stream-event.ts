@@ -1,5 +1,8 @@
 import type { QuotaExceededBody } from "../../usage/quota-exceeded.exception.js";
+import type { ThinkingLevelOption } from "../../usage/plan-limits.js";
 import type { AIExpense } from "../ai.factory.js";
+
+export type ModelSelection = "AUTO" | "MANUAL";
 
 export type ChatStreamStage = "classifying" | "retrieving" | "generating";
 
@@ -10,7 +13,16 @@ export type ChatStreamEvent =
 			type: "status";
 			data:
 				| { stage: "classifying" | "retrieving" }
-				| { stage: "generating"; model: AIExpense; title: string | null };
+				| {
+						stage: "generating";
+						model: AIExpense;
+						title: string | null;
+						selection: ModelSelection;
+						/** Thinking level the turn runs with. */
+						thinkingLevel: ThinkingLevelOption;
+						/** AUTO only: the tier the judge wanted but had no quota left. */
+						downgradedFrom?: AIExpense;
+				  };
 	  }
 	| { type: "thinking"; data: { text: string } }
 	| { type: "text"; data: { text: string } }

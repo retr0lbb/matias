@@ -13,7 +13,7 @@ import { planTable } from "../db/schemas/plans.js";
 import { promoCodeRedemptions } from "../db/schemas/promo-code-redemptions.js";
 import { promoCodesTable } from "../db/schemas/promo-codes.js";
 import { subscriptionTable } from "../db/schemas/subscriptions.js";
-import { planEnum, User, userTable } from "../db/schemas/user.js";
+import { User, userTable } from "../db/schemas/user.js";
 import type { AsaasCycle } from "../payment/dto/asaas-subscription.dto.js";
 import { PaymentService } from "../payment/payment.service.js";
 import { SubscribeDTO } from "./dto/create-subscription.dto.js";
@@ -303,15 +303,12 @@ export class SubscriptionService {
 					),
 				);
 
-			const [plan] = await tx.select().from(planTable).where(eq(planTable.id, activated.plan_id));
-			const userPlan = planEnum.enumValues.find((value) => value === plan?.name.toUpperCase());
-
-			if (userPlan) {
-				await tx
-					.update(userTable)
-					.set({ plan: userPlan, cycleAnchorAt: new Date() })
-					.where(eq(userTable.id, activated.user_id));
-			}
+			// Limits come from the subscription's plan (UsageService.resolvePlan);
+			// the new plan's usage cycle starts today.
+			await tx
+				.update(userTable)
+				.set({ cycleAnchorAt: new Date() })
+				.where(eq(userTable.id, activated.user_id));
 
 			return true;
 		});
@@ -380,8 +377,7 @@ export class SubscriptionService {
 				.returning();
 
 			if (!ended) return false;
-
-			await tx.update(userTable).set({ plan: "FREE" }).where(eq(userTable.id, ended.user_id));
+			// The user has no live subscription now, so UsageService falls back to the free plan.
 
 			// A revoked redemption no longer counts toward the limits of the code.
 			await tx
