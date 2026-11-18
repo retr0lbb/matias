@@ -1,5 +1,6 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import type { AIResponse, AIStreamChunk, AiProvider } from "../ai-provider.type.js";
+import { buildPrompt, PromptProps } from "../constants/prompts.js";
 import { mapGeminiStream } from "./gemini-stream.js";
 
 // Troque aqui para rodar a matriz de testes
@@ -16,7 +17,7 @@ export class ExpensiveModel implements AiProvider {
 		});
 	}
 
-	async generate(input: { message: string }): Promise<AIResponse> {
+	async generate(input: { message: string; prompt: PromptProps }): Promise<AIResponse> {
 		const startedAt = new Date();
 		const t0 = performance.now();
 
@@ -27,6 +28,7 @@ export class ExpensiveModel implements AiProvider {
 				config: {
 					maxOutputTokens: 2048 * 2,
 					thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+					systemInstruction: buildPrompt(input.prompt),
 				},
 			});
 
@@ -54,6 +56,7 @@ export class ExpensiveModel implements AiProvider {
 	async *generateStream(input: {
 		message: string;
 		signal?: AbortSignal;
+		prompt: PromptProps;
 	}): AsyncGenerator<AIStreamChunk> {
 		const startedAt = new Date();
 
@@ -64,6 +67,7 @@ export class ExpensiveModel implements AiProvider {
 				maxOutputTokens: 2048 * 2,
 				thinkingConfig: { thinkingLevel: THINKING_LEVEL, includeThoughts: true },
 				abortSignal: input.signal,
+				systemInstruction: buildPrompt(input.prompt),
 			},
 		});
 

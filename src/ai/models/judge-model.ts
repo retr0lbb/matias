@@ -1,7 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { Injectable } from "@nestjs/common";
-import { JudgeReponse, judgeReponseSchema } from "../dto/judge-response.dto.js";
 import { ConfigService } from "@nestjs/config";
+import { JudgeReponse, judgeReponseSchema } from "../dto/judge-response.dto.js";
 
 @Injectable()
 export class JudgeModel {
@@ -29,21 +29,25 @@ export class JudgeModel {
 			let start = performance.now();
 
 			const contents = `
-					You are the routing judge for Matita AI.
-					Analyze the conversation history and the latest user message.
-					Generate the title in Brazilian Portuguese, with proper accents
+				You are the routing judge for Matita AI.
+				Analyze the conversation history and the latest user message.
+				Generate the title in Brazilian Portuguese, with proper accents
+				You must determine:
+				- The appropriate model tier.
+				- Whether document retrieval is necessary.
+				- Which registered tools are required.
+				- Generate a small title IF and ONLY IF history is empty.
 
-					You must determine:
-					- The appropriate model tier.
-					- Whether document retrieval is necessary.
-					- Which registered tools are required.
-					- Generate a small title IF and ONLY IF history is empty.
-
-					{CONVERSATION_HISTORY}
-					${JSON.stringify(history)}
-
-					{USER_LATEST_MESSAGE}
-					${prompt}
+				how to classify a message:
+				- simple message asking a questions that might need retrieval: CHEAP MODEL
+				- longer message asking for directions or to make a plan or that needs advanced retrieval: NORMAL MODEL
+				- Questions that are complex and needs extensive tools, retrieval or advanced document generation: EXPENSIVE MODEL
+				
+				{CONVERSATION_HISTORY}
+				${JSON.stringify(history)}
+				
+				{USER_LATEST_MESSAGE}
+				${prompt}
 			`;
 
 			timings.promptBuild = performance.now() - start;

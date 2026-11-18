@@ -1,8 +1,11 @@
+import { PromptProps } from "./constants/prompts.js";
+
 export interface AiProvider {
-	generate(input: { message: string }): Promise<AIResponse>;
+	generate(input: { message: string; prompt: PromptProps }): Promise<AIResponse>;
 	generateStream(input: {
 		message: string;
 		signal?: AbortSignal;
+		prompt: PromptProps;
 	}): AsyncGenerator<AIStreamChunk>;
 }
 

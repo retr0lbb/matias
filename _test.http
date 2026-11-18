@@ -5,15 +5,15 @@
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=gAMKjkYmMwenEtl9prieLsf6KScwPiUv5vs9JwzIMyQ
+@cookie = __Host-sid=9yF-I9yLJHj0iMYsw-bqo56nPXZJQN-GCoy8MEyDM0Y
 
 ### CHAT
-POST {{baseUrl}}/ai/chat?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
+POST {{baseUrl}}/ai/chat
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
-    "prompt": "Qual documento que foi enviado em anexo nesse chat? (CHEAP MODEL)"
+    "prompt": "Qual o seu nome e qual o seu proposito IA?"
 }
 
 ### CHAT STREAM (SSE)

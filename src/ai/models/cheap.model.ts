@@ -1,5 +1,6 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import type { AIResponse, AIStreamChunk, AiProvider } from "../ai-provider.type.js";
+import { buildPrompt, PromptProps } from "../constants/prompts.js";
 import { mapGeminiStream } from "./gemini-stream.js";
 
 // Troque aqui para rodar a matriz de testes
@@ -16,7 +17,7 @@ export class CheapModel implements AiProvider {
 		});
 	}
 
-	async generate(input: { message: string }): Promise<AIResponse> {
+	async generate(input: { message: string; prompt: PromptProps }): Promise<AIResponse> {
 		const startedAt = new Date();
 
 		const response = await this.client.models.generateContent({
@@ -25,6 +26,7 @@ export class CheapModel implements AiProvider {
 			config: {
 				maxOutputTokens: 2048,
 				thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+				systemInstruction: buildPrompt(input.prompt),
 			},
 		});
 
@@ -47,6 +49,7 @@ export class CheapModel implements AiProvider {
 	async *generateStream(input: {
 		message: string;
 		signal?: AbortSignal;
+		prompt: PromptProps;
 	}): AsyncGenerator<AIStreamChunk> {
 		const startedAt = new Date();
 
@@ -56,6 +59,8 @@ export class CheapModel implements AiProvider {
 			config: {
 				maxOutputTokens: 2048,
 				thinkingConfig: { thinkingLevel: THINKING_LEVEL, includeThoughts: false },
+				systemInstruction: buildPrompt(input.prompt),
+
 				abortSignal: input.signal,
 			},
 		});
