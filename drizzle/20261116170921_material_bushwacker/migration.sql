@@ -1,0 +1,1 @@
+ALTER TABLE "promo_code_redemption" ADD COLUMN "discount_removed_at" timestamp;
