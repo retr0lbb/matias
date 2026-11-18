@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "one_live_subscription_per_user" ON "subscriptions" ("user_id") WHERE "status" in ('PENDING', 'ACTIVE', 'EXPIRED');
