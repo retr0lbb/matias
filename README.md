@@ -118,5 +118,5 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 
 # TODO
-- [ ] Create json document parser
-- [ ] Create the web document building pattern
+- [ ] Add more instruction to document generation, asking fonts
+- [ ] process BNCC document

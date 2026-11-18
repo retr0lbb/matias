@@ -29,22 +29,22 @@ export class JudgeModel {
 			let start = performance.now();
 
 			const contents = `
-      You are the routing judge for Matita AI.
-      Analyze the conversation history and the latest user message.
-	  Generate the title in Brazilian Portuguese, with proper accents
+					You are the routing judge for Matita AI.
+					Analyze the conversation history and the latest user message.
+					Generate the title in Brazilian Portuguese, with proper accents
 
-      You must determine:
-      - The appropriate model tier.
-      - Whether document retrieval is necessary.
-      - Which registered tools are required.
-      - Generate a small title IF history is empty.
+					You must determine:
+					- The appropriate model tier.
+					- Whether document retrieval is necessary.
+					- Which registered tools are required.
+					- Generate a small title IF and ONLY IF history is empty.
 
-      {CONVERSATION_HISTORY}
-      ${JSON.stringify(history)}
+					{CONVERSATION_HISTORY}
+					${JSON.stringify(history)}
 
-      {USER_LATEST_MESSAGE}
-      ${prompt}
-    `;
+					{USER_LATEST_MESSAGE}
+					${prompt}
+			`;
 
 			timings.promptBuild = performance.now() - start;
 

@@ -18,7 +18,6 @@ export class CheapModel implements AiProvider {
 
 	async generate(input: { message: string }): Promise<AIResponse> {
 		const startedAt = new Date();
-		const t0 = performance.now();
 
 		const response = await this.client.models.generateContent({
 			model: MODEL,
@@ -29,21 +28,7 @@ export class CheapModel implements AiProvider {
 			},
 		});
 
-		const elapsedMs = performance.now() - t0;
 		const usage = response.usageMetadata;
-		const generatedTokens = (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0);
-
-		console.log("[GENERATE PERFORMANCE]", {
-			model: response.modelVersion ?? MODEL,
-			thinkingLevel: THINKING_LEVEL,
-			elapsedMs: Math.round(elapsedMs),
-			promptTokens: usage?.promptTokenCount,
-			answerTokens: usage?.candidatesTokenCount,
-			thoughtTokens: usage?.thoughtsTokenCount, // o suspeito
-			totalTokens: usage?.totalTokenCount,
-			tokensPerSecond: Math.round(generatedTokens / (elapsedMs / 1000)),
-			finishReason: response.candidates?.[0]?.finishReason,
-		});
 
 		return {
 			messageId: response.responseId ?? "",
