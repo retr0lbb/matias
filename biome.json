@@ -58,6 +58,9 @@
 			"trailingCommas": "all",
 			"semicolons": "always",
 			"arrowParentheses": "always"
+		},
+		"parser": {
+			"unsafeParameterDecoratorsEnabled": true
 		}
 	},
 

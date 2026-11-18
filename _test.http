@@ -92,3 +92,76 @@ Cookie: {{cookie}}
 ### QUTA
 GET {{baseUrl}}/usage
 Cookie: {{cookie}}
+
+
+### ASSESSMENT: generate (header and theme are optional)
+# @name assessment
+POST {{baseUrl}}/documents/assessments
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "prompt": "Prova de Ciências para o 6º ano sobre o sistema solar: 4 questões objetivas de 1 ponto e 2 dissertativas de 3 pontos.",
+    "header": {
+        "institutionName": "Escola Exemplo",
+        "teacherName": "Prof. Exemplo",
+        "subject": "Ciências"
+    },
+    "theme": {
+        "accentColor": "#1d4ed8"
+    }
+}
+
+### ASSESSMENT: stored JSON
+@assessmentId = {{assessment.response.body.id}}
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}
+Cookie: {{cookie}}
+
+### ASSESSMENT: HTML preview
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/preview
+Cookie: {{cookie}}
+
+### ASSESSMENT: PDF
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
+Cookie: {{cookie}}
+
+### ASSESSMENT: answer key PDF
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
+Cookie: {{cookie}}
+
+### ASSESSMENT: answer key HTML preview
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
+Cookie: {{cookie}}
+
+### ASSESSMENT: manual patch (no AI). "version" is the one from the last response; ids come from the stored JSON
+PATCH {{baseUrl}}/documents/assessments/{{assessmentId}}
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 1,
+    "ops": [
+        { "op": "set_title", "title": "Prova Bimestral de Ciências" },
+        { "op": "update_theme", "theme": { "baseFontSizePt": 14, "numbering": "continuous" } },
+        { "op": "update_header_fields", "fields": { "score": false } }
+    ]
+}
+
+### ASSESSMENT: AI revision (the AI returns a patch)
+POST {{baseUrl}}/documents/assessments/{{assessmentId}}/revise
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 2,
+    "instruction": "Adicione mais uma questão objetiva de 1 ponto sobre a Lua no final da primeira seção."
+}
+
+### ASSESSMENT: regenerate the content (keeps header and theme; "prompt" is optional)
+POST {{baseUrl}}/documents/assessments/{{assessmentId}}/regenerate
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "version": 3
+}

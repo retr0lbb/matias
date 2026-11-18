@@ -3,21 +3,25 @@ import { InjectDrizzle } from "@nestjs/drizzle";
 import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
+import {
+  type DocumentCreditReason,
+  documentCreditsTable,
+} from "../db/schemas/document.js";
 import { messageExpenseEnum, messagesTable } from "../db/schemas/message.js";
 import { planTable } from "../db/schemas/plans.js";
 import { ragDocumentsTable } from "../db/schemas/rag-document.js";
 import { subscriptionTable } from "../db/schemas/subscriptions.js";
 import type { User } from "../db/schemas/user.js";
-import { getCycle, type BillingCycle } from "./billing-cycle.js";
-import { PlanRestrictionException } from "./plan-restriction.exception.js";
+import { type BillingCycle, getCycle } from "./billing-cycle.js";
 import {
   FREE_PLAN_SLUG,
   isThinkingLevelAllowed,
-  planLimitsSchema,
   type PlanLimits,
+  planLimitsSchema,
   type ThinkingLevelOption,
   type UsageCycleKind,
 } from "./plan-limits.js";
+import { PlanRestrictionException } from "./plan-restriction.exception.js";
 import { type QuotaCode, QuotaExceededException } from "./quota-exceeded.exception.js";
 
 export type MessageExpense = (typeof messageExpenseEnum.enumValues)[number];
@@ -26,7 +30,7 @@ export type MessageExpense = (typeof messageExpenseEnum.enumValues)[number];
 export type UsageSubject = Pick<User, "id" | "cycleAnchorAt">;
 
 /** The database or an open transaction. */
-export type DbExecutor = Pick<NodePgDatabase, "select" | "execute">;
+export type DbExecutor = Pick<NodePgDatabase, "select" | "execute" | "insert">;
 
 export interface ResolvedPlan {
   id: string;
@@ -40,6 +44,13 @@ export interface ChatAllowance {
   plan: ResolvedPlan;
   cycle: BillingCycle;
   used: Record<MessageExpense, number>;
+}
+
+/** Plan limits and document credits spent this cycle. */
+export interface DocumentAllowance {
+  plan: ResolvedPlan;
+  cycle: BillingCycle;
+  used: number;
 }
 
 export interface ModelChoice {
@@ -58,6 +69,8 @@ export interface UsageSummary {
   maxFileBytes: number;
   messages: { cheap: Counter; normal: Counter; expensive: Counter };
   maxThinkingLevel: ThinkingLevelOption;
+  /** AI document generation credits; each covers `aiChangesPerDocument` AI changes. */
+  documentGeneration: Counter & { aiChangesPerDocument: number | null };
 }
 
 // A subscription still grants its plan while payment is overdue (EXPIRED).
@@ -87,9 +100,10 @@ export class UsageService {
     const { limits } = plan;
     const cycle = this.cycleFor(user, limits.cycle);
 
-    const [documents, used] = await Promise.all([
+    const [documents, used, documentCredits] = await Promise.all([
       this.countDocuments(this.db, user.id, cycle),
       this.countMessagesByExpense(user.id, cycle),
+      this.countDocumentCredits(this.db, user.id, cycle),
     ]);
 
     return {
@@ -111,6 +125,11 @@ export class UsageService {
         expensive: { used: used.EXPENSIVE, limit: limits.messagesPerCycle.expensive },
       },
       maxThinkingLevel: limits.maxThinkingLevel,
+      documentGeneration: {
+        used: documentCredits,
+        limit: limits.documentsPerCycle,
+        aiChangesPerDocument: limits.aiChangesPerDocument,
+      },
     };
   }
 
@@ -233,8 +252,11 @@ export class UsageService {
     }
   }
 
-  /** Throws when the plan doesn't include the requested thinking level. */
-  assertThinkingLevelAllowed(allowance: ChatAllowance, requested: ThinkingLevelOption): void {
+  /** Throws when the plan doesn't include the requested thinking level (chat and documents). */
+  assertThinkingLevelAllowed(
+    allowance: { plan: ResolvedPlan },
+    requested: ThinkingLevelOption,
+  ): void {
     const allowed = allowance.plan.limits.maxThinkingLevel;
 
     if (!isThinkingLevelAllowed(requested, allowed)) {
@@ -285,8 +307,88 @@ export class UsageService {
     return limit === null || allowance.used[expense] < limit;
   }
 
+  /**
+   * Document credits spent this cycle. Pass a transaction to re-check under
+   * `lockUser` right before spending.
+   */
+  async getDocumentAllowance(
+    executor: DbExecutor,
+    user: UsageSubject,
+  ): Promise<DocumentAllowance> {
+    const plan = await this.resolvePlan(executor, user.id);
+    const cycle = this.cycleFor(user, plan.limits.cycle);
+    const used = await this.countDocumentCredits(executor, user.id, cycle);
+
+    return { plan, cycle, used };
+  }
+
+  /**
+   * Whether the next AI change spends a credit. `aiRevisions` is how many AI
+   * changes the document already has: with 7 per credit, the 8th (15th, ...)
+   * opens a new block and spends one.
+   */
+  extraCreditNeeded(allowance: DocumentAllowance, aiRevisions: number): boolean {
+    const perCredit = allowance.plan.limits.aiChangesPerDocument;
+    return perCredit !== null && aiRevisions > 0 && aiRevisions % perCredit === 0;
+  }
+
+  /** Throws when no document credit is left this cycle. */
+  assertCanSpendDocumentCredit(
+    allowance: DocumentAllowance,
+    reason: DocumentCreditReason,
+  ): void {
+    const { limits } = allowance.plan;
+    const limit = limits.documentsPerCycle;
+
+    if (limit === null || allowance.used < limit) {
+      return;
+    }
+
+    const resets = `Your limit resets on ${formatDay(allowance.cycle.resetsAt)}.`;
+    const message =
+      limit === 0
+        ? "Document generation isn't included in your plan."
+        : reason === "GENERATE"
+          ? `You've generated all ${limit} documents for ${cycleWord(limits.cycle)}. ${resets}`
+          : `This document has used its ${limits.aiChangesPerDocument} included AI changes. More changes use one of your document generations, and you've used all ${limit} for ${cycleWord(limits.cycle)}. ${resets}`;
+
+    throw new QuotaExceededException({
+      code: "DOCUMENTS_PER_CYCLE",
+      message,
+      limit,
+      used: allowance.used,
+      resetsAt: limit === 0 ? null : allowance.cycle.resetsAt,
+    });
+  }
+
+  /** Writes the ledger row for a spent credit; call inside the same transaction as the change. */
+  async recordDocumentCredit(
+    executor: DbExecutor,
+    entry: { userId: string; assessmentId: string; reason: DocumentCreditReason },
+  ): Promise<void> {
+    await executor.insert(documentCreditsTable).values(entry);
+  }
+
   private cycleFor(user: UsageSubject, kind: UsageCycleKind): BillingCycle {
     return getCycle(kind, user.cycleAnchorAt, new Date());
+  }
+
+  private async countDocumentCredits(
+    executor: DbExecutor,
+    userId: string,
+    cycle: BillingCycle,
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ used: sql<number>`count(*)`.mapWith(Number) })
+      .from(documentCreditsTable)
+      .where(
+        and(
+          eq(documentCreditsTable.userId, userId),
+          gte(documentCreditsTable.createdAt, cycle.start),
+        ),
+      );
+
+    return row?.used ?? 0;
   }
 
   // FAILED documents were never usable, so they don't count against the user.

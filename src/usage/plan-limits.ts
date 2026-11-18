@@ -27,6 +27,13 @@ export const planLimitsSchema = z.object({
 		expensive: perCycle,
 	}),
 	maxThinkingLevel: z.enum(THINKING_LEVELS),
+	/** AI-generated documents (assessments). 0 turns the feature off. */
+	documentsPerCycle: perCycle,
+	/**
+	 * AI changes (revise/regenerate) included with each document credit. The
+	 * next change after each block spends one more credit. `null` = unlimited.
+	 */
+	aiChangesPerDocument: z.number().int().positive().nullable(),
 });
 
 export type PlanLimits = z.infer<typeof planLimitsSchema>;
