@@ -1,399 +1,552 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { InjectDrizzle } from '@nestjs/drizzle';
-import { desc, eq } from 'drizzle-orm';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { conversationsTable } from '../db/schemas/conversation.js';
-import { messagesTable } from '../db/schemas/message.js';
-import { userTable } from '../db/schemas/user.js';
-import { RagSearchResult, RagService } from '../rag/rag.service.js';
-import { QuotaExceededException, type QuotaExceededBody } from '../usage/quota-exceeded.exception.js';
-import { UsageService } from '../usage/usage.service.js';
-import type { AIResponse } from './ai-provider.type.js';
-import { AIExpense, AiExpensesFactory } from './ai.factory.js';
-import type { ChatStreamEvent } from './dto/chat-stream-event.js';
-import { JudgeModel } from './models/judge-model.js';
+import {
+	BadRequestException,
+	ForbiddenException,
+	Injectable,
+	Logger,
+	UnauthorizedException,
+} from "@nestjs/common";
+import { InjectDrizzle } from "@nestjs/drizzle";
+import { desc, eq } from "drizzle-orm";
+import { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { conversationsTable } from "../db/schemas/conversation.js";
+import { type MessageMetadata, messagesTable } from "../db/schemas/message.js";
+import { userTable } from "../db/schemas/user.js";
+import { RagSearchResult, RagService } from "../rag/rag.service.js";
+import {
+	type QuotaExceededBody,
+	QuotaExceededException,
+} from "../usage/quota-exceeded.exception.js";
+import type { ThinkingLevelOption } from "../usage/plan-limits.js";
+import { type ChatAllowance, UsageService } from "../usage/usage.service.js";
+import { AIExpense, AiExpensesFactory } from "./ai.factory.js";
+import type { AIResponse } from "./ai-provider.type.js";
+import type { ChatOptions } from "./dto/chat-body.dto.js";
+import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js";
+import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
 
 const HISTORY_LIMIT = 20;
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type History = { role: "USER" | "IA"; content: string | null }[];
 
 export interface ChatStreamContext {
-  user: typeof userTable.$inferSelect;
-  prompt: string;
-  conversation: { id: string; title: string | null };
-  /** RAG only runs when the client sent a conversationId (same rule as chat()). */
-  ragEnabled: boolean;
+	user: typeof userTable.$inferSelect;
+	prompt: string;
+	conversation: { id: string; title: string | null };
+	/** RAG only runs when the client sent a conversationId (same rule as chat()). */
+	ragEnabled: boolean;
+	options: ChatOptions;
+	/** Plan limits and usage, loaded (and checked for MANUAL picks) before the stream starts. */
+	allowance: ChatAllowance;
+}
+
+/** Which model and thinking level a turn runs with, and why. */
+interface Turn {
+	model: AIExpense;
+	selection: ModelSelection;
+	downgradedFrom?: AIExpense;
+	thinkingLevel: ThinkingLevelOption;
+	judge: JudgeClassification;
 }
 
 @Injectable()
 export class AiService {
-  private readonly logger = new Logger(AiService.name);
+	private readonly logger = new Logger(AiService.name);
 
-  constructor(
-    private readonly aiFactory: AiExpensesFactory,
-    @InjectDrizzle() private readonly db: NodePgDatabase,
-    private readonly ragService: RagService,
-    private readonly usageService: UsageService,
-    private readonly judgeModel: JudgeModel
-  ) {}
+	constructor(
+		private readonly aiFactory: AiExpensesFactory,
+		@InjectDrizzle() private readonly db: NodePgDatabase,
+		private readonly ragService: RagService,
+		private readonly usageService: UsageService,
+		private readonly judgeModel: JudgeModel,
+	) {}
 
+	async chat(
+		prompt: string,
+		loggedUser: string,
+		conversationId: string | undefined,
+		options: ChatOptions,
+	) {
+		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, loggedUser));
 
-  async chat(prompt: string, loggedUser: string, conversationId?: string) {
-    const [user] = await this.db.select()
-      .from(userTable)
-      .where(
-        eq(userTable.id, loggedUser)
-      )
+		if (!user) {
+			throw new UnauthorizedException("User not authenticated properly");
+		}
 
-    if(!user){
-      throw new UnauthorizedException("User not authenticated properly")
-    }
+		const allowance = await this.loadAllowance(user, options);
 
-    let conversation: {
-      title: string | null;
-      id: string;
-      userId: string;
-      createdAt: Date;
-      updatedAt: Date | null;
-    }
+		let conversation: {
+			title: string | null;
+			id: string;
+			userId: string;
+			createdAt: Date;
+			updatedAt: Date | null;
+		};
 
-    if(conversationId){
-      if(!UUID_PATTERN.test(conversationId)){
-        throw new BadRequestException("conversationId must be a UUID")
-      }
+		if (conversationId) {
+			if (!UUID_PATTERN.test(conversationId)) {
+				throw new BadRequestException("conversationId must be a UUID");
+			}
 
-      const [foundConversation] = await this.db.select()
-        .from(conversationsTable)
-        .where(
-          eq(conversationsTable.id, conversationId)
-        )
+			const [foundConversation] = await this.db
+				.select()
+				.from(conversationsTable)
+				.where(eq(conversationsTable.id, conversationId));
 
-      if(foundConversation && foundConversation.userId !== loggedUser){
-        throw new ForbiddenException("Not your chat pal")
-      }
+			if (foundConversation && foundConversation.userId !== loggedUser) {
+				throw new ForbiddenException("Not your chat pal");
+			}
 
-      if(foundConversation){
-        conversation = foundConversation
-      }else{
-        // Clients can pre-generate the conversation id so documents uploaded
-        // with that id are found when the chat starts.
-        const [newConversation] = await this.db.insert(conversationsTable).values({
-          id: conversationId,
-          userId: loggedUser
-        }).returning()
+			if (foundConversation) {
+				conversation = foundConversation;
+			} else {
+				// Clients can pre-generate the conversation id so documents uploaded
+				// with that id are found when the chat starts.
+				const [newConversation] = await this.db
+					.insert(conversationsTable)
+					.values({
+						id: conversationId,
+						userId: loggedUser,
+					})
+					.returning();
 
-        conversation = newConversation
-      }
-    }else{
-      const [newConversation] = await this.db.insert(conversationsTable).values({
-        userId: loggedUser
-      }).returning()
+				conversation = newConversation;
+			}
+		} else {
+			const [newConversation] = await this.db
+				.insert(conversationsTable)
+				.values({
+					userId: loggedUser,
+				})
+				.returning();
 
-      conversation = newConversation
-    }
+			conversation = newConversation;
+		}
 
-    const history = (
-      await this.db.select({
-        role: messagesTable.role,
-        content: messagesTable.content,
-      })
-        .from(messagesTable)
-        .where(eq(messagesTable.conversationId, conversation.id))
-        .orderBy(desc(messagesTable.createdAt))
-        .limit(HISTORY_LIMIT)
-    ).reverse()
+		const history = (
+			await this.db
+				.select({
+					role: messagesTable.role,
+					content: messagesTable.content,
+				})
+				.from(messagesTable)
+				.where(eq(messagesTable.conversationId, conversation.id))
+				.orderBy(desc(messagesTable.createdAt))
+				.limit(HISTORY_LIMIT)
+		).reverse();
 
-    const judgeResponse = await this.judgeModel.classify(prompt, history)
-    
-    console.log("JUDGE RESPONSE =================")
-    console.log(judgeResponse)
-    
-    await this.usageService.assertCanChat(user, judgeResponse.model)
+		const turn = await this.planTurn(prompt, history, options, allowance);
+		const judgeResponse = turn.judge;
 
-    if (judgeResponse.title && !conversation.title) {
-      await this.db.update(conversationsTable)
-        .set({ title: judgeResponse.title })
-        .where(eq(conversationsTable.id, conversation.id))
+		if (judgeResponse.title && !conversation.title) {
+			await this.db
+				.update(conversationsTable)
+				.set({ title: judgeResponse.title })
+				.where(eq(conversationsTable.id, conversation.id));
 
-      conversation.title = judgeResponse.title
-    }
+			conversation.title = judgeResponse.title;
+		}
 
-    const chunks: RagSearchResult[] =
-      judgeResponse.retrieve && conversationId
-        ? await this.retrieveContext(prompt, loggedUser, conversation.id)
-        : []
+		const chunks: RagSearchResult[] =
+			judgeResponse.retrieve && conversationId
+				? await this.retrieveContext(prompt, loggedUser, conversation.id)
+				: [];
 
-    const input = buildRagPrompt(prompt, chunks, history)
+		const input = buildRagPrompt(prompt, chunks, history);
 
-    await this.db.insert(messagesTable).values({
-      conversationId: conversation.id,
-      role: "USER",
-      content: prompt
-    })
+		await this.db.insert(messagesTable).values({
+			conversationId: conversation.id,
+			role: "USER",
+			content: prompt,
+		});
 
-    const provider = this.aiFactory.create(judgeResponse.model as AIExpense);
+		const provider = this.aiFactory.create(turn.model);
 
-    this.logger.log(`[RAG] retrieve=${judgeResponse.retrieve} conversationId=${conversationId}`)
-    const message = await provider.generate({ message: input });
+		this.logger.log(`[RAG] retrieve=${judgeResponse.retrieve} conversationId=${conversationId}`);
+		const message = await provider.generate({
+			message: input,
+			thinkingLevel: turn.thinkingLevel,
+			prompt: {
+				needRetrieval: judgeResponse.retrieve,
+				needTools: false, // hard coded false
+				tier: turn.model,
+				userInfo: user,
+				needDocumentGeneration: false,
+			},
+		});
 
-    await this.db.insert(messagesTable).values({
-      conversationId: conversation.id,
-      role: "IA",
-      content: message.output_text,
-      inputTokens: message.usage.total_input_tokens,
-      outputTokens: message.usage.total_tokens,
-      interactionId: message.messageId,
-      expense: judgeResponse.model,
-    })
+		await this.db.insert(messagesTable).values({
+			conversationId: conversation.id,
+			role: "IA",
+			content: message.output_text,
+			inputTokens: message.tokens.prompt,
+			outputTokens: message.tokens.output + message.tokens.thoughts,
+			interactionId: message.messageId,
+			expense: turn.model,
+			metadata: this.buildMetadata(turn, message),
+		});
 
-    return message.output_text
-  }
+		return message.output_text;
+	}
 
-  /**
-   * Cheap checks that must fail with a real HTTP status (401/400/403), run
-   * before the controller switches the response to SSE. The slow work (judge,
-   * usage, RAG) happens inside streamAnswer so the client gets bytes right away.
-   */
-  async prepareStream(
-    prompt: string,
-    loggedUser: string,
-    conversationId?: string,
-  ): Promise<ChatStreamContext> {
+	async prepareStream(
+		prompt: string,
+		loggedUser: string,
+		conversationId: string | undefined,
+		options: ChatOptions,
+	): Promise<ChatStreamContext> {
+		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, loggedUser));
 
-    const [user] = await this.db.select()
-      .from(userTable)
-      .where(eq(userTable.id, loggedUser))
+		if (!user) {
+			throw new UnauthorizedException("User not authenticated properly");
+		}
 
-    if (!user) {
-      throw new UnauthorizedException("User not authenticated properly")
-    }
+		// Before any SSE header: a MANUAL pick over quota is a real HTTP 429.
+		const allowance = await this.loadAllowance(user, options);
 
-    let conversation: { id: string; userId: string; title: string | null }
+		let conversation: { id: string; userId: string; title: string | null };
 
-    if (conversationId) {
-      if (!UUID_PATTERN.test(conversationId)) {
-        throw new BadRequestException("conversationId must be a UUID")
-      }
+		if (conversationId) {
+			if (!UUID_PATTERN.test(conversationId)) {
+				throw new BadRequestException("conversationId must be a UUID");
+			}
 
-      const [foundConversation] = await this.db.select()
-        .from(conversationsTable)
-        .where(eq(conversationsTable.id, conversationId))
+			const [foundConversation] = await this.db
+				.select()
+				.from(conversationsTable)
+				.where(eq(conversationsTable.id, conversationId));
 
-      if (foundConversation && foundConversation.userId !== loggedUser) {
-        throw new ForbiddenException("Not your chat pal")
-      }
+			if (foundConversation && foundConversation.userId !== loggedUser) {
+				throw new ForbiddenException("Not your chat pal");
+			}
 
-      if (foundConversation) {
-        conversation = foundConversation
-      } else {
-        // Clients can pre-generate the conversation id so documents uploaded
-        // with that id are found when the chat starts.
-        const [newConversation] = await this.db.insert(conversationsTable).values({
-          id: conversationId,
-          userId: loggedUser,
-        }).returning()
+			if (foundConversation) {
+				conversation = foundConversation;
+			} else {
+				// Clients can pre-generate the conversation id so documents uploaded
+				// with that id are found when the chat starts.
+				const [newConversation] = await this.db
+					.insert(conversationsTable)
+					.values({
+						id: conversationId,
+						userId: loggedUser,
+					})
+					.returning();
 
-        conversation = newConversation
-      }
-    } else {
-      const [newConversation] = await this.db.insert(conversationsTable).values({
-        userId: loggedUser,
-      }).returning()
+				conversation = newConversation;
+			}
+		} else {
+			const [newConversation] = await this.db
+				.insert(conversationsTable)
+				.values({
+					userId: loggedUser,
+				})
+				.returning();
 
-      conversation = newConversation
-    }
+			conversation = newConversation;
+		}
 
-    return {
-      user,
-      prompt,
-      conversation: { id: conversation.id, title: conversation.title },
-      ragEnabled: Boolean(conversationId),
-    }
-  }
+		return {
+			user,
+			prompt,
+			conversation: { id: conversation.id, title: conversation.title },
+			ragEnabled: Boolean(conversationId),
+			options,
+			allowance,
+		};
+	}
 
-  /**
-   * Streams the answer for a prepared chat. Never throws: failures become an
-   * `error` event. The IA message is saved when the stream ends, with partial
-   * text if the client aborted (FAILED) or generation broke (ERROR).
-   */
-  async *streamAnswer(
-    ctx: ChatStreamContext,
-    signal: AbortSignal,
-  ): AsyncGenerator<ChatStreamEvent> {
+	/**
+	 * Streams the answer for a prepared chat. Never throws: failures become an
+	 * `error` event. The IA message is saved when the stream ends, with partial
+	 * text if the client aborted (FAILED) or generation broke (ERROR).
+	 */
+	async *streamAnswer(
+		ctx: ChatStreamContext,
+		signal: AbortSignal,
+	): AsyncGenerator<ChatStreamEvent> {
+		let partial = "";
+		let partialThinking = "";
+		let final: AIResponse | undefined;
+		let turn: Turn | undefined;
+		let status: "COMPLETED" | "FAILED" | "ERROR" = "FAILED";
 
-    let partial = ""
-    let final: AIResponse | undefined
-    let model: AIExpense | undefined
-    let status: "COMPLETED" | "FAILED" | "ERROR" = "FAILED"
+		yield {
+			type: "start",
+			data: { conversationId: ctx.conversation.id, title: ctx.conversation.title },
+		};
 
-    yield {
-      type: "start",
-      data: { conversationId: ctx.conversation.id, title: ctx.conversation.title },
-    }
+		try {
+			yield { type: "status", data: { stage: "classifying" } };
 
-    try {
-      yield { type: "status", data: { stage: "classifying" } }
+			const history = (
+				await this.db
+					.select({
+						role: messagesTable.role,
+						content: messagesTable.content,
+					})
+					.from(messagesTable)
+					.where(eq(messagesTable.conversationId, ctx.conversation.id))
+					.orderBy(desc(messagesTable.createdAt))
+					.limit(HISTORY_LIMIT)
+			).reverse();
 
-      const history = (
-        await this.db.select({
-          role: messagesTable.role,
-          content: messagesTable.content,
-        })
-          .from(messagesTable)
-          .where(eq(messagesTable.conversationId, ctx.conversation.id))
-          .orderBy(desc(messagesTable.createdAt))
-          .limit(HISTORY_LIMIT)
-      ).reverse()
+			turn = await this.planTurn(ctx.prompt, history, ctx.options, ctx.allowance);
+			const judgeResponse = turn.judge;
 
-      const judgeResponse = await this.judgeModel.classify(ctx.prompt, history)
+			if (judgeResponse.title && !ctx.conversation.title) {
+				await this.db
+					.update(conversationsTable)
+					.set({ title: judgeResponse.title })
+					.where(eq(conversationsTable.id, ctx.conversation.id));
 
-      await this.usageService.assertCanChat(ctx.user, judgeResponse.model)
+				ctx.conversation.title = judgeResponse.title;
+			}
 
-      if (judgeResponse.title && !ctx.conversation.title) {
-        await this.db.update(conversationsTable)
-          .set({ title: judgeResponse.title })
-          .where(eq(conversationsTable.id, ctx.conversation.id))
+			let chunks: RagSearchResult[] = [];
+			if (judgeResponse.retrieve && ctx.ragEnabled) {
+				yield { type: "status", data: { stage: "retrieving" } };
+				chunks = await this.retrieveContext(ctx.prompt, ctx.user.id, ctx.conversation.id);
+			}
 
-        ctx.conversation.title = judgeResponse.title
-      }
+			const input = buildRagPrompt(ctx.prompt, chunks, history);
 
-      let chunks: RagSearchResult[] = []
-      if (judgeResponse.retrieve && ctx.ragEnabled) {
-        yield { type: "status", data: { stage: "retrieving" } }
-        chunks = await this.retrieveContext(ctx.prompt, ctx.user.id, ctx.conversation.id)
-      }
+			await this.db.insert(messagesTable).values({
+				conversationId: ctx.conversation.id,
+				role: "USER",
+				content: ctx.prompt,
+			});
 
-      const input = buildRagPrompt(ctx.prompt, chunks, history)
+			const provider = this.aiFactory.create(turn.model);
 
-      await this.db.insert(messagesTable).values({
-        conversationId: ctx.conversation.id,
-        role: "USER",
-        content: ctx.prompt,
-      })
+			yield {
+				type: "status",
+				data: {
+					stage: "generating",
+					model: turn.model,
+					title: ctx.conversation.title,
+					selection: turn.selection,
+					thinkingLevel: turn.thinkingLevel,
+					downgradedFrom: turn.downgradedFrom,
+				},
+			};
+			for await (const chunk of provider.generateStream({
+				message: input,
+				signal,
+				thinkingLevel: turn.thinkingLevel,
+				prompt: {
+					needDocumentGeneration: false,
+					needRetrieval: judgeResponse.retrieve,
+					needTools: false,
+					tier: turn.model,
+				},
+			})) {
+				if (chunk.type === "text") {
+					partial += chunk.text;
+					yield { type: "text", data: { text: chunk.text } };
+				} else if (chunk.type === "thinking") {
+					partialThinking += chunk.text;
+					yield { type: "thinking", data: { text: chunk.text } };
+				} else {
+					final = chunk.response;
+				}
+			}
 
-      model = judgeResponse.model as AIExpense
-      const provider = this.aiFactory.create(model)
+			if (final) {
+				status = "COMPLETED";
+				yield {
+					type: "done",
+					data: {
+						messageId: final.messageId,
+						finishReason: final.status,
+						usage: final.usage,
+					},
+				};
+			}
+		} catch (error) {
+			if (signal.aborted) {
+				status = "FAILED";
+				this.logger.warn(`[STREAM] client aborted conversation=${ctx.conversation.id}`);
+			} else if (error instanceof QuotaExceededException) {
+				status = "ERROR";
+				yield { type: "error", data: error.getResponse() as QuotaExceededBody };
+			} else {
+				status = "ERROR";
+				this.logger.error(`[STREAM] generation failed conversation=${ctx.conversation.id}`, error);
+				yield { type: "error", data: { code: "GENERATION_FAILED", message: "Generation failed" } };
+			}
+		} finally {
+			if (turn) {
+				await this.saveStreamedMessage(
+					ctx,
+					turn,
+					final?.output_text ?? partial,
+					final,
+					status,
+					partialThinking,
+				);
+			}
+		}
+	}
 
-      yield {
-        type: "status",
-        data: { stage: "generating", model, title: ctx.conversation.title },
-      }
-      for await (const chunk of provider.generateStream({ message: input, signal })) {
+	/**
+	 * Loads limits/usage once and rejects up front (before any conversation or
+	 * SSE header) a thinking level the plan doesn't include (403) or a MANUAL
+	 * model with no quota left (429).
+	 */
+	private async loadAllowance(user: { id: string; cycleAnchorAt: Date }, options: ChatOptions) {
+		const allowance = await this.usageService.getChatAllowance(user);
 
-        if (chunk.type === "text") {
-          partial += chunk.text
-          yield { type: "text", data: { text: chunk.text } }
-        } else if (chunk.type === "thinking") {
-          yield { type: "thinking", data: { text: chunk.text } }
-        } else {
-          final = chunk.response
-        }
-      }
+		// CHEAP always runs at MINIMAL, so the requested level doesn't matter there.
+		if (options.model !== "CHEAP") {
+			this.usageService.assertThinkingLevelAllowed(allowance, options.thinkingLevel);
+		}
 
-      if (final) {
-        status = "COMPLETED"
-        yield {
-          type: "done",
-          data: {
-            messageId: final.messageId,
-            finishReason: final.status,
-            usage: final.usage,
-          },
-        }
-      }
-    } catch (error) {
-      if (signal.aborted) {
-        status = "FAILED"
-        this.logger.warn(`[STREAM] client aborted conversation=${ctx.conversation.id}`)
-      } else if (error instanceof QuotaExceededException) {
-        status = "ERROR"
-        yield { type: "error", data: error.getResponse() as QuotaExceededBody }
-      } else {
-        status = "ERROR"
-        this.logger.error(`[STREAM] generation failed conversation=${ctx.conversation.id}`, error)
-        yield { type: "error", data: { code: "GENERATION_FAILED", message: "Generation failed" } }
-      }
-    } finally {
-      if (model) {
-        await this.saveStreamedMessage(ctx, model, final?.output_text ?? partial, final, status)
-      }
-    }
-  }
+		if (options.model !== "AUTO") {
+			this.usageService.assertCanChat(allowance, options.model);
+		}
 
-  private async saveStreamedMessage(
-    ctx: ChatStreamContext,
-    model: AIExpense,
-    content: string,
-    final: AIResponse | undefined,
-    status: "COMPLETED" | "FAILED" | "ERROR",
-  ): Promise<void> {
-    if (content.length === 0) {
-      return
-    }
+		return allowance;
+	}
 
-    try {
-      await this.db.insert(messagesTable).values({
-        conversationId: ctx.conversation.id,
-        role: "IA",
-        content,
-        inputTokens: final?.usage.total_input_tokens ?? 0,
-        outputTokens: final?.usage.total_tokens ?? 0,
-        interactionId: final?.messageId || null,
-        expense: model,
-        status,
-      })
-    } catch (error) {
-      this.logger.error(`[STREAM] failed to save IA message conversation=${ctx.conversation.id}`, error)
-    }
-  }
+	/**
+	 * Runs the judge and settles the model. AUTO lets the judge pick and
+	 * downgrades when that tier has no quota left; MANUAL picks and the
+	 * thinking level were already checked in `loadAllowance`.
+	 */
+	private async planTurn(
+		prompt: string,
+		history: History,
+		options: ChatOptions,
+		allowance: ChatAllowance,
+	): Promise<Turn> {
+		const thinking = { thinkingLevel: options.thinkingLevel };
 
-  private async retrieveContext(prompt: string, userId: string, conversationId: string) {
-    try {
-      const ready = await this.ragService.hasReadyDocuments(userId, conversationId)
-      this.logger.log(`[RAG] conversation=${conversationId} ready=${ready}`)
-      if (!ready) return []
+		if (options.model !== "AUTO") {
+			const judge = await this.judgeModel.classify({ prompt, history, routeModel: false });
+			return { model: AIExpense[options.model], selection: "MANUAL", judge, ...thinking };
+		}
 
-      const results = await this.ragService.search(prompt, userId, { conversationId })
-      this.logger.log(`[RAG] results=${results.length}`)
-      return results
-    } catch (error) {
-      this.logger.error("[RAG] search failed", error)
-      return []
-    }
-  }
+		const judge = await this.judgeModel.classify({ prompt, history, routeModel: true });
+		const choice = this.usageService.pickAvailableModel(allowance, judge.model);
+
+		return {
+			model: AIExpense[choice.model],
+			selection: "AUTO",
+			downgradedFrom: choice.downgradedFrom && AIExpense[choice.downgradedFrom],
+			judge,
+			...thinking,
+		};
+	}
+
+	private async saveStreamedMessage(
+		ctx: ChatStreamContext,
+		turn: Turn,
+		content: string,
+		final: AIResponse | undefined,
+		status: "COMPLETED" | "FAILED" | "ERROR",
+		partialThinking: string,
+	): Promise<void> {
+		if (content.length === 0) {
+			return;
+		}
+
+		try {
+			await this.db.insert(messagesTable).values({
+				conversationId: ctx.conversation.id,
+				role: "IA",
+				content,
+				inputTokens: final?.tokens.prompt ?? 0,
+				outputTokens: final ? final.tokens.output + final.tokens.thoughts : 0,
+				interactionId: final?.messageId || null,
+				expense: turn.model,
+				status,
+				metadata: this.buildMetadata(turn, final, partialThinking),
+			});
+		} catch (error) {
+			this.logger.error(
+				`[STREAM] failed to save IA message conversation=${ctx.conversation.id}`,
+				error,
+			);
+		}
+	}
+
+	/**
+	 * Metadata for an IA message. Without `final` (aborted/failed stream) only the
+	 * turn decisions, judge usage and any partial thinking text are known.
+	 */
+	private buildMetadata(
+		turn: Turn,
+		final: AIResponse | undefined,
+		partialThinking?: string,
+	): MessageMetadata {
+		const thinking = final?.thinking_output ?? (partialThinking || undefined);
+		const decided: MessageMetadata = {
+			tier: turn.model,
+			selection: turn.selection,
+			downgradedFrom: turn.downgradedFrom,
+			thinkingOption: turn.thinkingLevel,
+			judge: turn.judge.usage,
+		};
+
+		if (!final) {
+			return { ...decided, thinking };
+		}
+
+		return {
+			...decided,
+			modelName: final.modelName,
+			modelId: final.model,
+			thinkingLevel: final.thinkingLevel,
+			finishReason: final.status,
+			latencyMs: Date.parse(final.updated) - Date.parse(final.created),
+			tokens: final.tokens,
+			thinking,
+		};
+	}
+
+	private async retrieveContext(prompt: string, userId: string, conversationId: string) {
+		try {
+			const ready = await this.ragService.hasReadyDocuments(userId, conversationId);
+			this.logger.log(`[RAG] conversation=${conversationId} ready=${ready}`);
+			if (!ready) return [];
+
+			const results = await this.ragService.search(prompt, userId, { conversationId });
+			this.logger.log(`[RAG] results=${results.length}`);
+			return results;
+		} catch (error) {
+			this.logger.error("[RAG] search failed", error);
+			return [];
+		}
+	}
 }
 
 function buildRagPrompt(
-  prompt: string,
-  chunks: RagSearchResult[],
-  history: Array<{ role: string; content: string | null }>,
+	prompt: string,
+	chunks: RagSearchResult[],
+	history: Array<{ role: string; content: string | null }>,
 ): string {
-  const sections = [
-    "You are a helpful assistant. Answer the user using the context below when it is relevant. If the context does not contain the answer, say so and answer from general knowledge.",
-  ]
+	const sections = [
+		"You are a helpful assistant. Answer the user using the context below when it is relevant. If the context does not contain the answer, say so and answer from general knowledge.",
+	];
 
-  if (chunks.length > 0) {
-    sections.push(
-      "Context:\n" +
-        chunks
-          .map(
-            (chunk, index) =>
-              `[${index + 1}] ${chunk.filename}\n${chunk.content}`,
-          )
-          .join("\n\n"),
-    )
-  }
+	if (chunks.length > 0) {
+		sections.push(
+			"Context:\n" +
+				chunks
+					.map((chunk, index) => `[${index + 1}] ${chunk.filename}\n${chunk.content}`)
+					.join("\n\n"),
+		);
+	}
 
-  if (history.length > 0) {
-    sections.push(
-      "Conversation history:\n" +
-        history
-          .map((message) => `${message.role}: ${message.content ?? ""}`)
-          .join("\n"),
-    )
-  }
+	if (history.length > 0) {
+		sections.push(
+			"Conversation history:\n" +
+				history.map((message) => `${message.role}: ${message.content ?? ""}`).join("\n"),
+		);
+	}
 
-  sections.push(`User: ${prompt}`)
+	sections.push(`User: ${prompt}`);
 
-  return sections.join("\n\n")
+	return sections.join("\n\n");
 }

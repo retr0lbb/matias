@@ -81,6 +81,7 @@ ${theme.pageBreakPerSection ? '.section + .section { break-before: page; }' : ''
 .answer-line { height: 2em; border-bottom: 1px solid #555; }
 
 .answer-key-answer { margin: 0.3em 0 0 1.6em; white-space: pre-wrap; }
+.answer-key-explanation { margin: 0.2em 0 0 1.6em; white-space: pre-wrap; font-size: 0.95em; }
 
 @media screen {
   body { background: #e5e7eb; padding: 16px; }

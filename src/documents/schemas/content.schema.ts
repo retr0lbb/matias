@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 
 export const DEFAULT_OPEN_ENDED_LINES = 5;
 export const MAX_OPEN_ENDED_LINES = 30;
+export const MAX_EXPLANATION_LENGTH = 1000;
 
 // Shapes are kept unrefined so the AI schema (no ids) and the stored schema
 // (with ids) are built from the same fields; refinements are applied last.
@@ -11,6 +12,10 @@ const multipleChoiceShape = {
   points: z.number().positive(),
   alternatives: z.array(z.string().min(1)).min(2).max(5),
   correctIndex: z.number().int().min(0),
+  // Why the correct alternative is right; shown only in the answer key.
+  // Optional so manual edits and documents saved before it stay valid; the
+  // AI is told to always write it.
+  explanation: z.string().max(MAX_EXPLANATION_LENGTH).optional(),
 };
 
 const openEndedShape = {

@@ -1,11 +1,11 @@
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import type { AIResponse, AIStreamChunk, AiProvider } from "../ai-provider.type.js";
+import { GoogleGenAI } from "@google/genai";
+import type { AIResponse, AIStreamChunk, AiProvider, GenerateInput } from "../ai-provider.type.js";
+import { buildPrompt } from "../constants/prompts.js";
+import { extractThoughts, toGeminiThinkingLevel, toTokenUsage } from "./gemini-response.js";
 import { mapGeminiStream } from "./gemini-stream.js";
 
 // Troque aqui para rodar a matriz de testes
 const MODEL = "gemini-3.8-flash";
-const THINKING_LEVEL = ThinkingLevel.THINKING_LEVEL_UNSPECIFIED;
-const STREAM_THINKING_LEVEL = ThinkingLevel.LOW;
 
 export class NormalModel implements AiProvider {
 	private readonly client: GoogleGenAI;
@@ -17,16 +17,18 @@ export class NormalModel implements AiProvider {
 		});
 	}
 
-	async generate(input: { message: string }): Promise<AIResponse> {
+	async generate(input: GenerateInput): Promise<AIResponse> {
 		const startedAt = new Date();
 		const t0 = performance.now();
+		const thinkingLevel = toGeminiThinkingLevel(input.thinkingLevel);
 
 		const response = await this.client.models.generateContent({
 			model: MODEL,
 			contents: input.message,
 			config: {
 				maxOutputTokens: 2048,
-				thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+				thinkingConfig: { thinkingLevel, includeThoughts: true },
+				systemInstruction: buildPrompt(input.prompt),
 			},
 		});
 
@@ -36,7 +38,7 @@ export class NormalModel implements AiProvider {
 
 		console.log("[GENERATE PERFORMANCE]", {
 			model: response.modelVersion ?? MODEL,
-			thinkingLevel: THINKING_LEVEL,
+			thinkingLevel,
 			elapsedMs: Math.round(elapsedMs),
 			promptTokens: usage?.promptTokenCount,
 			answerTokens: usage?.candidatesTokenCount,
@@ -49,34 +51,40 @@ export class NormalModel implements AiProvider {
 		return {
 			messageId: response.responseId ?? "",
 			model: response.modelVersion ?? MODEL,
+			modelName: MODEL,
+			thinkingLevel,
 			status: response.candidates?.[0]?.finishReason ?? "UNKNOWN",
 			created: startedAt.toISOString(),
 			updated: new Date().toISOString(),
 			output_text: response.text ?? "",
+			thinking_output: extractThoughts(response),
 			usage: {
 				total_input_tokens: usage?.promptTokenCount ?? 0,
 				total_tokens: usage?.totalTokenCount ?? 0,
 			},
+			tokens: toTokenUsage(usage),
 		};
 	}
 
-	async *generateStream(input: {
-		message: string;
-		signal?: AbortSignal;
-	}): AsyncGenerator<AIStreamChunk> {
+	async *generateStream(input: GenerateInput & { signal?: AbortSignal }): AsyncGenerator<AIStreamChunk> {
 		const startedAt = new Date();
+		const thinkingLevel = toGeminiThinkingLevel(input.thinkingLevel);
 
 		const stream = await this.client.models.generateContentStream({
 			model: MODEL,
 			contents: input.message,
 			config: {
 				maxOutputTokens: 2048,
-				// Streaming uses LOW: the default level can think for seconds before the first token.
-				thinkingConfig: { thinkingLevel: STREAM_THINKING_LEVEL, includeThoughts: true },
+				thinkingConfig: { thinkingLevel, includeThoughts: true },
 				abortSignal: input.signal,
+				systemInstruction: buildPrompt(input.prompt),
 			},
 		});
 
-		yield* mapGeminiStream(stream, MODEL, startedAt);
+		yield* mapGeminiStream(
+			stream,
+			{ modelName: MODEL, thinkingLevel },
+			startedAt,
+		);
 	}
 }

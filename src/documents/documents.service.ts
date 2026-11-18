@@ -16,7 +16,13 @@ import {
   assessmentsTable,
 } from '../db/schemas/document.js';
 import { conversationsTable } from '../db/schemas/conversation.js';
-import { UsageService, type UsageSubject } from '../usage/usage.service.js';
+import type { ThinkingLevelOption } from '../usage/plan-limits.js';
+import {
+  type DbExecutor,
+  type DocumentAllowance,
+  UsageService,
+  type UsageSubject,
+} from '../usage/usage.service.js';
 import { AssessmentAiService } from './ai/document-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
 import { applyPatch } from './patch/apply-patch.js';
@@ -37,6 +43,8 @@ export interface GenerateAssessmentInput {
   conversationId?: string;
   header?: AssessmentHeader;
   theme?: AssessmentTheme;
+  /** Must be within the plan's max thinking level (403 otherwise). */
+  thinkingLevel: ThinkingLevelOption;
 }
 
 export interface PatchAssessmentInput {
@@ -47,12 +55,14 @@ export interface PatchAssessmentInput {
 export interface ReviseAssessmentInput {
   version: number;
   instruction: string;
+  thinkingLevel: ThinkingLevelOption;
 }
 
 export interface RegenerateAssessmentInput {
   version: number;
   /** Falls back to the request the assessment was last generated from. */
   prompt?: string;
+  thinkingLevel: ThinkingLevelOption;
 }
 
 export interface AssessmentView {
@@ -105,9 +115,14 @@ export class AssessmentsService {
   ): Promise<AssessmentView> {
     await this.assertConversationAccess(user.id, input.conversationId);
     // Fail before paying for the AI call; checked again under lock on insert.
-    await this.usageService.assertCanCreateAssessment(this.db, user);
+    const allowance = await this.usageService.getDocumentAllowance(this.db, user);
+    this.usageService.assertThinkingLevelAllowed(allowance, input.thinkingLevel);
+    this.usageService.assertCanSpendDocumentCredit(allowance, 'GENERATE');
 
-    const generated = await this.assessmentAi.generate(input.prompt);
+    const generated = await this.assessmentAi.generate(
+      input.prompt,
+      input.thinkingLevel,
+    );
 
     const document = assessmentDocumentSchema.parse({
       schemaVersion: ASSESSMENT_SCHEMA_VERSION,
@@ -118,7 +133,10 @@ export class AssessmentsService {
 
     const row = await this.db.transaction(async (tx) => {
       await this.usageService.lockUser(tx, user.id);
-      await this.usageService.assertCanCreateAssessment(tx, user);
+      this.usageService.assertCanSpendDocumentCredit(
+        await this.usageService.getDocumentAllowance(tx, user),
+        'GENERATE',
+      );
 
       const [inserted] = await tx
         .insert(assessmentsTable)
@@ -129,6 +147,12 @@ export class AssessmentsService {
           prompt: input.prompt,
         })
         .returning();
+
+      await this.usageService.recordDocumentCredit(tx, {
+        userId: user.id,
+        assessmentId: inserted.id,
+        reason: 'GENERATE',
+      });
 
       return inserted;
     });
@@ -200,15 +224,12 @@ export class AssessmentsService {
   ): Promise<AssessmentView> {
     const current = await this.get(id, user.id);
     this.assertVersion(current, input.version);
-    await this.usageService.assertCanReviseAssessment(
-      this.db,
-      user,
-      current.aiRevisions,
-    );
+    await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
     const document = await this.assessmentAi.revise(
       current.document,
       input.instruction,
+      input.thinkingLevel,
     );
 
     return this.saveAiRevision(current, user, { document });
@@ -228,13 +249,9 @@ export class AssessmentsService {
       throw new BadRequestException('A prompt is required');
     }
 
-    await this.usageService.assertCanReviseAssessment(
-      this.db,
-      user,
-      current.aiRevisions,
-    );
+    await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
-    const generated = await this.assessmentAi.generate(prompt);
+    const generated = await this.assessmentAi.generate(prompt, input.thinkingLevel);
 
     const document = assessmentDocumentSchema.parse({
       ...current.document,
@@ -302,8 +319,32 @@ export class AssessmentsService {
     }
   }
 
+  /**
+   * Before an AI change (revise/regenerate): the thinking level must be in the
+   * plan, and a change that opens a new block of included changes needs a free
+   * credit. Returns the allowance so callers under lock can reuse it.
+   */
+  private async assertCanChangeWithAi(
+    executor: DbExecutor,
+    user: UsageSubject,
+    current: AssessmentView,
+    thinkingLevel?: ThinkingLevelOption,
+  ): Promise<DocumentAllowance> {
+    const allowance = await this.usageService.getDocumentAllowance(executor, user);
+
+    if (thinkingLevel) {
+      this.usageService.assertThinkingLevelAllowed(allowance, thinkingLevel);
+    }
+    if (this.usageService.extraCreditNeeded(allowance, current.aiRevisions)) {
+      this.usageService.assertCanSpendDocumentCredit(allowance, 'EXTRA_CHANGES');
+    }
+
+    return allowance;
+  }
+
   // Quota is re-checked under the per-user lock, and the write only lands if
-  // nobody changed the assessment while the AI was working.
+  // nobody changed the assessment while the AI was working. The extra credit
+  // is recorded only when the change actually lands.
   private async saveAiRevision(
     current: AssessmentView,
     user: UsageSubject,
@@ -311,11 +352,7 @@ export class AssessmentsService {
   ): Promise<AssessmentView> {
     const row = await this.db.transaction(async (tx) => {
       await this.usageService.lockUser(tx, user.id);
-      await this.usageService.assertCanReviseAssessment(
-        tx,
-        user,
-        current.aiRevisions,
-      );
+      const allowance = await this.assertCanChangeWithAi(tx, user, current);
 
       const [updated] = await tx
         .update(assessmentsTable)
@@ -326,6 +363,14 @@ export class AssessmentsService {
         })
         .where(this.atVersion(current, user.id))
         .returning();
+
+      if (updated && this.usageService.extraCreditNeeded(allowance, current.aiRevisions)) {
+        await this.usageService.recordDocumentCredit(tx, {
+          userId: user.id,
+          assessmentId: updated.id,
+          reason: 'EXTRA_CHANGES',
+        });
+      }
 
       return updated;
     });

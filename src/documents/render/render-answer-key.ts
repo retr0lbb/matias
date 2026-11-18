@@ -15,6 +15,8 @@ function renderAnswer({ question, number }: NumberedQuestion): string {
     question.kind === 'multiple_choice'
       ? `${alternativeLabel(question.correctIndex)}) ${escapeHtml(question.alternatives[question.correctIndex])}`
       : escapeHtml(question.expectedAnswer);
+  const explanation =
+    question.kind === 'multiple_choice' ? question.explanation?.trim() : undefined;
 
   return [
     '<article class="question">',
@@ -24,6 +26,9 @@ function renderAnswer({ question, number }: NumberedQuestion): string {
     `<span class="question-points">(${formatPoints(question.points)})</span>`,
     '</div>',
     `<p class="answer-key-answer"><strong>Resposta:</strong> ${answer}</p>`,
+    explanation
+      ? `<p class="answer-key-explanation"><strong>Justificativa:</strong> ${escapeHtml(explanation)}</p>`
+      : '',
     '</article>',
   ].join('');
 }

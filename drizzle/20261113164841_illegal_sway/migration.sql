@@ -1,0 +1,1 @@
+ALTER TABLE "subscriptions" ADD COLUMN "asaas_subscription_id" varchar;

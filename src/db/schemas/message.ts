@@ -16,10 +16,44 @@ export const messageStatusEnum = pgEnum("message_status", ["FAILED", "COMPLETED"
 // Mirrors AIExpense (src/ai/ai.factory.ts); used to count advanced-model usage.
 export const messageExpenseEnum = pgEnum("message_expense", ["CHEAP", "NORMAL", "EXPENSIVE"])
 
+export type MessageTokenUsage = {
+    prompt: number,
+    /** Answer tokens only (Gemini candidatesTokenCount). */
+    output: number,
+    thoughts: number,
+    cached: number,
+    total: number
+}
+
+export type JudgeMetadata = {
+    modelId: string,
+    latencyMs: number,
+    tokens: MessageTokenUsage
+}
+
+/**
+ * Stored on IA messages. Generation fields are missing when the stream was
+ * aborted or failed before the model finished.
+ */
 export type MessageMetadata = {
-    modelName: string,
-    temperature: number,
-    modelId: string
+    tier: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    /** AUTO = judge picked the tier; MANUAL = user picked it. */
+    selection?: "AUTO" | "MANUAL",
+    /** Tier the judge wanted before AUTO downgraded it for lack of quota. */
+    downgradedFrom?: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    /** User-facing thinking level the turn ran with (already allowed by the plan). */
+    thinkingOption?: "DEFAULT" | "HIGH" | "ULTRA_HIGH",
+    /** Model requested by the app. */
+    modelName?: string,
+    /** Model version Gemini reports it actually used. */
+    modelId?: string,
+    /** Gemini thinking level actually sent. */
+    thinkingLevel?: string,
+    finishReason?: string,
+    latencyMs?: number,
+    tokens?: MessageTokenUsage,
+    thinking?: string,
+    judge?: JudgeMetadata
 }
 
 export const messagesTable = pgTable("messages", 

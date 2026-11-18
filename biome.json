@@ -23,7 +23,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"preset": "recommended",
+			"recommended": true,
 
 			"security": {
 				"recommended": true
@@ -40,6 +40,7 @@
 			"suspicious": {
 				"recommended": true
 			},
+
 			"style": {
 				"useImportType": "off"
 			}
@@ -47,6 +48,9 @@
 	},
 
 	"javascript": {
+		"parser": {
+			"unsafeParameterDecoratorsEnabled": true
+		},
 		"formatter": {
 			"quoteStyle": "double",
 			"jsxQuoteStyle": "double",

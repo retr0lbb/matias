@@ -37,3 +37,33 @@ export function getCurrentCycle(anchor: Date, now: Date): BillingCycle {
 
   return { start, resetsAt };
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+/**
+ * 7-day usage cycle anchored to the anchor's UTC midnight.
+ * `start` is inclusive, `resetsAt` is exclusive.
+ */
+export function getCurrentWeeklyCycle(anchor: Date, now: Date): BillingCycle {
+  const anchorDay = Date.UTC(
+    anchor.getUTCFullYear(),
+    anchor.getUTCMonth(),
+    anchor.getUTCDate(),
+  );
+  // Before the anchor (clock skew) counts as the first week.
+  const weeks = Math.max(0, Math.floor((now.getTime() - anchorDay) / WEEK_MS));
+  const start = new Date(anchorDay + weeks * WEEK_MS);
+
+  return { start, resetsAt: new Date(start.getTime() + WEEK_MS) };
+}
+
+export function getCycle(
+  kind: "WEEKLY" | "MONTHLY",
+  anchor: Date,
+  now: Date,
+): BillingCycle {
+  return kind === "WEEKLY"
+    ? getCurrentWeeklyCycle(anchor, now)
+    : getCurrentCycle(anchor, now);
+}

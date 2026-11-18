@@ -2,10 +2,6 @@ import { boolean, pgEnum, pgTable, timestamp, uuid, varchar } from "drizzle-orm/
 
 export const loginProviderEnum = pgEnum("login_provider_enum", ["LOCAL", "GOOGLE"]);
 
-export const planEnum = pgEnum("plan_enum", ["FREE", "PRO"]);
-
-export type Plan = (typeof planEnum.enumValues)[number];
-
 export const userTable = pgTable("users", {
 	id: uuid().primaryKey().defaultRandom(),
 	name: varchar().notNull(),
@@ -14,9 +10,8 @@ export const userTable = pgTable("users", {
 	passwordHash: varchar("passwd_hash"),
 	loginProvider: loginProviderEnum().notNull().default("LOCAL"),
 	googleSubject: varchar("google_subject").unique(),
-	plan: planEnum().notNull().default("FREE"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
-	// Day of month the usage cycle resets on. Billing will reset it on plan changes.
+	// Day the usage cycle (weekly or monthly, per plan) is anchored to. Reset on plan activation.
 	cycleAnchorAt: timestamp("cycle_anchor_at").defaultNow().notNull(),
 });
 

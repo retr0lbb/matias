@@ -1,4 +1,4 @@
-import { type Content, GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { type Content, GoogleGenAI } from "@google/genai";
 import {
 	BadGatewayException,
 	Injectable,
@@ -7,6 +7,9 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { z } from "zod/v4";
+import { DOCGEN_FULL, IDENTITY_INTRO } from "../../ai/constants/prompts.js";
+import { toGeminiThinkingLevel } from "../../ai/models/gemini-response.js";
+import type { ThinkingLevelOption } from "../../usage/plan-limits.js";
 import { applyPatch, formatPatchIssues } from "../patch/apply-patch.js";
 import { type AiAssessment, aiAssessmentSchema } from "../schemas/content.schema.js";
 import type { AssessmentDocument } from "../schemas/document.schema.js";
@@ -19,15 +22,29 @@ const MAX_ATTEMPTS = 2;
 const MAX_OUTPUT_TOKENS = 8192;
 const REQUEST_TIMEOUT_MS = 90_000;
 
+// Same identity and document rules as the chat (src/ai/constants/prompts.ts),
+// so both answer as MATIAS. The chat's conversation rules (clarifying
+// questions, citing sources) don't apply to a JSON-only answer.
+const PERSONA = `
+${IDENTITY_INTRO}
+
+${DOCGEN_FULL}
+- Here the answer key lives in the JSON: for "multiple_choice", write the reasoning in "explanation"; for "open_ended", inside "expectedAnswer".
+- When you cite an exam question, put the citation at the end of the statement, e.g. "(ENEM 2019)".
+`.trim();
+
 const CONTENT_RULES = `
 - Write everything in the language of the teacher's request (Brazilian Portuguese when unclear), with correct accents.
 - "multiple_choice": 2 to 5 alternatives, exactly one correct; "correctIndex" is the zero-based position of the correct alternative. Do not prefix alternatives with letters or numbers.
+- "multiple_choice": always write "explanation", one to three sentences on why the correct alternative is right (and, when useful, why the most tempting wrong one is wrong). Do not refer to alternatives by letter: letters are added later. It appears only in the teacher's answer key. When a change affects the alternatives or the correct one, rewrite the explanation to match.
 - "open_ended": "expectedAnswer" is the answer key for the teacher; "lines" is how many blank lines the student gets (0 to 30).
 - Do not number questions or sections and do not write point values inside statements: numbering and totals are added later.
 - Plain text only: no Markdown, no HTML.
 `.trim();
 
 const GENERATION_INSTRUCTIONS = `
+${PERSONA}
+
 You write school assessments for teachers. Return one assessment as JSON that follows the response schema.
 
 Rules:
@@ -38,6 +55,8 @@ ${CONTENT_RULES}
 `.trim();
 
 const REVISION_INSTRUCTIONS = `
+${PERSONA}
+
 You edit an existing school assessment. You receive its current JSON and a change request from the teacher. Return {"ops": [...]}: the smallest list of operations that makes the requested change, applied in order.
 
 Operations:
@@ -112,11 +131,11 @@ export class AssessmentAiService {
 	 * goes back to the model once with the validation errors; after that it is
 	 * a 502.
 	 */
-	async generate(prompt: string): Promise<AiAssessment> {
+	async generate(prompt: string, thinkingLevel: ThinkingLevelOption): Promise<AiAssessment> {
 		const contents: Content[] = [{ role: "user", parts: [{ text: prompt }] }];
 
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-			const text = await this.request(contents, GENERATION_INSTRUCTIONS, this.assessmentSchema);
+			const text = await this.request(contents, thinkingLevel, GENERATION_INSTRUCTIONS, this.assessmentSchema);
 			const result = parseJson(text, aiAssessmentSchema);
 
 			if (result.success) {
@@ -137,7 +156,11 @@ export class AssessmentAiService {
 	 * patched document. A patch that does not apply goes back to the model once
 	 * with the errors; after that it is a 422 and nothing changes.
 	 */
-	async revise(document: AssessmentDocument, instruction: string): Promise<AssessmentDocument> {
+	async revise(
+		document: AssessmentDocument,
+		instruction: string,
+		thinkingLevel: ThinkingLevelOption,
+	): Promise<AssessmentDocument> {
 		// The header's school data (and its large logo) is not the model's to see or change.
 		const current = {
 			content: document.content,
@@ -161,7 +184,7 @@ export class AssessmentAiService {
 			// No responseJsonSchema here: Gemini answers 400 to the patch schema (a
 			// union of many operations), so the schema travels in the instructions
 			// and the Zod parse plus applyPatch do the enforcing.
-			const text = await this.request(contents, REVISION_INSTRUCTIONS);
+			const text = await this.request(contents, thinkingLevel, REVISION_INSTRUCTIONS);
 			const parsed = parseJson(text, aiPatchSchema);
 
 			if (parsed.success) {
@@ -191,6 +214,7 @@ export class AssessmentAiService {
 
 	private async request(
 		contents: Content[],
+		thinkingLevel: ThinkingLevelOption,
 		systemInstruction: string,
 		responseJsonSchema?: Record<string, unknown>,
 	): Promise<string | undefined> {
@@ -201,7 +225,7 @@ export class AssessmentAiService {
 				config: {
 					systemInstruction,
 					maxOutputTokens: MAX_OUTPUT_TOKENS,
-					thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+					thinkingConfig: { thinkingLevel: toGeminiThinkingLevel(thinkingLevel) },
 					responseMimeType: "application/json",
 					...(responseJsonSchema ? { responseJsonSchema } : {}),
 				},

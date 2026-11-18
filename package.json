@@ -14,13 +14,16 @@
 		"start:dev": "nest start --watch",
 		"start:debug": "nest start --debug --watch",
 		"start:prod": "node dist/main",
-		"db:studio": "drizzle-kit studio",
 		"lint": "oxlint --type-aware src/ test/",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:cov": "vitest run --coverage",
 		"test:debug": "vitest --inspect-brk --no-file-parallelism",
-		"test:e2e": "vitest run --config ./vitest.config.e2e.ts"
+		"test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+		"db:generate": "drizzle-kit generate",
+		"db:migrate": "drizzle-kit migrate",
+		"db:studio": "drizzle-kit studio",
+		"start:ngrok": "ngrok http 3000 --url https://backfire-skeletal-coil.ngrok-free.dev"
 	},
 	"dependencies": {
 		"@biomejs/biome": "^2.6.5",
@@ -53,6 +56,7 @@
 		"@types/pg": "^8.23.1",
 		"@types/supertest": "^7.0.0",
 		"@vitest/coverage-v8": "^4.1.2",
+		"@vitest/ui": "^5.1.0",
 		"drizzle-kit": "1.0.0-rc.4",
 		"oxlint": "^1.58.0",
 		"oxlint-tsgolint": "^7.0.2001",

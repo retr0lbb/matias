@@ -14,6 +14,7 @@ import {
 import { z } from "zod/v4";
 import type { User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
+import { THINKING_LEVELS } from "../usage/plan-limits.js";
 import { AssessmentsService, type AssessmentView, type RenderedPdf } from "./documents.service.js";
 import { headerSchema } from "./schemas/header.schema.js";
 import { patchSchema } from "./schemas/patch.schema.js";
@@ -25,6 +26,8 @@ const MAX_INSTRUCTION_LENGTH = 2000;
 const prompt = z.string().trim().min(1).max(MAX_PROMPT_LENGTH);
 // The version the client last saw; a stale one is answered with 409.
 const version = z.number().int().min(1);
+// Same option as chat; above the plan's max it is a 403.
+const thinkingLevel = z.enum(THINKING_LEVELS).default("DEFAULT");
 
 const generateBodySchema = z.object({
 	prompt,
@@ -32,6 +35,7 @@ const generateBodySchema = z.object({
 	// Set by the teacher, never by the AI. Both fall back to the defaults.
 	header: headerSchema.optional(),
 	theme: themeSchema.optional(),
+	thinkingLevel,
 });
 
 type GenerateBody = z.infer<typeof generateBodySchema>;
@@ -42,10 +46,11 @@ type PatchBody = z.infer<typeof patchBodySchema>;
 const reviseBodySchema = z.object({
 	version,
 	instruction: z.string().trim().min(1).max(MAX_INSTRUCTION_LENGTH),
+	thinkingLevel,
 });
 type ReviseBody = z.infer<typeof reviseBodySchema>;
 
-const regenerateBodySchema = z.object({ version, prompt: prompt.optional() });
+const regenerateBodySchema = z.object({ version, prompt: prompt.optional(), thinkingLevel });
 type RegenerateBody = z.infer<typeof regenerateBodySchema>;
 
 // The preview is shown inside a sandboxed iframe; this keeps it inert even if
