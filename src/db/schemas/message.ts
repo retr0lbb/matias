@@ -9,6 +9,7 @@ import {
     uuid, 
     varchar
 } from "drizzle-orm/pg-core";
+import type { DocumentType } from "../../documents/types/document-type.js";
 import { conversationsTable } from "./conversation.js";
 
 export const roleEnum = pgEnum("roles", ["USER", "IA"])
@@ -33,10 +34,14 @@ export type JudgeMetadata = {
 
 /**
  * Stored on IA messages. Generation fields are missing when the stream was
- * aborted or failed before the model finished.
+ * aborted or failed before the model finished. Messages written by the
+ * documents module carry `documentId`/`documentType` and no `tier`.
  */
 export type MessageMetadata = {
-    tier: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    tier?: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    /** The document this message reports (created or regenerated in the documents module). */
+    documentId?: string,
+    documentType?: DocumentType,
     /** AUTO = judge picked the tier; MANUAL = user picked it. */
     selection?: "AUTO" | "MANUAL",
     /** Tier the judge wanted before AUTO downgraded it for lack of quota. */

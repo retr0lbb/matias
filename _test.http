@@ -94,13 +94,14 @@ GET {{baseUrl}}/usage
 Cookie: {{cookie}}
 
 
-### ASSESSMENT: generate (header and theme are optional)
-# @name assessment
-POST {{baseUrl}}/documents/assessments
+### DOCUMENT: generate. "type" is assessment (default), homework, lesson_plan, course_syllabus or group_work; header and theme are optional
+# @name document
+POST {{baseUrl}}/documents
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
+    "type": "assessment",
     "prompt": "Prova de Ciências para o 6º ano sobre o sistema solar: 4 questões objetivas de 1 ponto e 2 dissertativas de 3 pontos.",
     "header": {
         "institutionName": "Escola Exemplo",
@@ -112,29 +113,29 @@ Cookie: {{cookie}}
     }
 }
 
-### ASSESSMENT: stored JSON
-@assessmentId = {{assessment.response.body.id}}
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}
+### DOCUMENT: stored JSON (includes the type)
+@documentId = {{document.response.body.id}}
+GET {{baseUrl}}/documents/{{documentId}}
 Cookie: {{cookie}}
 
-### ASSESSMENT: HTML preview
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/preview
+### DOCUMENT: HTML preview
+GET {{baseUrl}}/documents/{{documentId}}/preview
 Cookie: {{cookie}}
 
-### ASSESSMENT: PDF
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
+### DOCUMENT: PDF
+GET {{baseUrl}}/documents/{{documentId}}/pdf
 Cookie: {{cookie}}
 
-### ASSESSMENT: answer key PDF
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
+### DOCUMENT: answer key PDF (400 for types without an answer key: lesson_plan, course_syllabus)
+GET {{baseUrl}}/documents/{{documentId}}/answer-key
 Cookie: {{cookie}}
 
-### ASSESSMENT: answer key HTML preview
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
+### DOCUMENT: answer key HTML preview
+GET {{baseUrl}}/documents/{{documentId}}/answer-key/preview
 Cookie: {{cookie}}
 
-### ASSESSMENT: manual patch (no AI). "version" is the one from the last response; ids come from the stored JSON
-PATCH {{baseUrl}}/documents/assessments/{{assessmentId}}
+### DOCUMENT: manual patch (no AI). "version" is the one from the last response; ids come from the stored JSON
+PATCH {{baseUrl}}/documents/{{documentId}}
 Content-Type: application/json
 Cookie: {{cookie}}
 
@@ -147,8 +148,8 @@ Cookie: {{cookie}}
     ]
 }
 
-### ASSESSMENT: AI revision (the AI returns a patch)
-POST {{baseUrl}}/documents/assessments/{{assessmentId}}/revise
+### DOCUMENT: AI revision (the AI returns a patch)
+POST {{baseUrl}}/documents/{{documentId}}/revise
 Content-Type: application/json
 Cookie: {{cookie}}
 
@@ -157,11 +158,90 @@ Cookie: {{cookie}}
     "instruction": "Adicione mais uma questão objetiva de 1 ponto sobre a Lua no final da primeira seção."
 }
 
-### ASSESSMENT: regenerate the content (keeps header and theme; "prompt" is optional)
-POST {{baseUrl}}/documents/assessments/{{assessmentId}}/regenerate
+### DOCUMENT: regenerate the content (keeps header and theme; "prompt" is optional).
+# The chat is read as it was when the document was created; "refreshContext": true reads it as it is now.
+POST {{baseUrl}}/documents/{{documentId}}/regenerate
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
-    "version": 3
+    "version": 3,
+    "refreshContext": false
 }
+
+### DOCUMENT: generate from a chat. Put the id of a conversation you already talked in here.
+# The model reads the conversation (and its uploaded documents); the chat gets a USER + IA message about it.
+# With no subject anywhere the answer is 422 { "code": "NEEDS_CLARIFICATION", "question": "..." }.
+@chatConversationId = 00000000-0000-4000-8000-000000000000
+POST {{baseUrl}}/documents
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "type": "assessment",
+    "prompt": "Com base na conversa, crie a prova",
+    "conversationId": "{{chatConversationId}}"
+}
+
+### HOMEWORK: generate (blocks: questions, text, list, code; header has no score field)
+# @name homework
+POST {{baseUrl}}/documents
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "type": "homework",
+    "prompt": "Lição de casa de Matemática para o 7º ano sobre equações do 1º grau: 5 exercícios de 2 pontos.",
+    "header": { "subject": "Matemática" }
+}
+
+### LESSON PLAN: generate (blocks: text, list, table; no student fields, no answer key; "extra" adds labelled header values)
+# @name lessonPlan
+POST {{baseUrl}}/documents
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "type": "lesson_plan",
+    "prompt": "Plano de aula de 50 minutos sobre frações equivalentes para o 6º ano.",
+    "header": {
+        "institutionName": "Escola Exemplo",
+        "teacherName": "Prof. Exemplo",
+        "className": "6º A",
+        "extra": [{ "label": "Duração", "value": "50 min" }]
+    }
+}
+
+### LESSON PLAN: preview
+@lessonPlanId = {{lessonPlan.response.body.id}}
+GET {{baseUrl}}/documents/{{lessonPlanId}}/preview
+Cookie: {{cookie}}
+
+### COURSE SYLLABUS: generate
+# @name courseSyllabus
+POST {{baseUrl}}/documents
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "type": "course_syllabus",
+    "prompt": "Plano de ensino de Programação Orientada a Objetos para o 2º semestre, 60 horas, 18 semanas.",
+    "header": { "extra": [{ "label": "Carga horária", "value": "60 h" }, { "label": "Período", "value": "2026/2" }] }
+}
+
+### GROUP WORK: generate (blocks: text, list, table, research_task, deliverable, rubric; the rubric gives the value)
+# @name groupWork
+POST {{baseUrl}}/documents
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "type": "group_work",
+    "prompt": "Trabalho em grupo de Geografia para o 8º ano sobre a distribuição da água no Brasil: grupos de 4, entrega de um relatório escrito, vale 10 pontos.",
+    "header": { "subject": "Geografia", "className": "8º A" }
+}
+
+### GROUP WORK: correction guide (expected findings, expected outline, grading guidance)
+@groupWorkId = {{groupWork.response.body.id}}
+GET {{baseUrl}}/documents/{{groupWorkId}}/answer-key/preview
+Cookie: {{cookie}}

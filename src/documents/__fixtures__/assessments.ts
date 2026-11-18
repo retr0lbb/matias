@@ -1,14 +1,14 @@
-import type { AiAssessmentInput } from '../schemas/content.schema.js';
+import type { AiContentInput } from '../schemas/content.schema.js';
 
 /** Raw AI-shaped payloads (before validation) shared by the assessment specs. */
 
-export const shortAssessment: AiAssessmentInput = {
+export const shortAssessment: AiContentInput = {
   title: 'Avaliação de Biologia',
   instructions: 'Leia as questões com atenção.',
   sections: [
     {
       title: 'Parte A: Objetivas',
-      questions: [
+      blocks: [
         {
           kind: 'multiple_choice',
           statement: 'Qual organela celular produz energia?',
@@ -25,7 +25,7 @@ export const shortAssessment: AiAssessmentInput = {
     },
     {
       title: 'Parte B: Discursivas',
-      questions: [
+      blocks: [
         {
           kind: 'open_ended',
           statement:
@@ -40,12 +40,12 @@ export const shortAssessment: AiAssessmentInput = {
   ],
 };
 
-export const multiSectionAssessment: AiAssessmentInput = {
+export const multiSectionAssessment: AiContentInput = {
   title: 'Avaliação de Matemática',
   sections: [
     {
       title: 'Aritmética',
-      questions: [
+      blocks: [
         {
           kind: 'multiple_choice',
           statement: 'O número 7 é primo?',
@@ -64,7 +64,7 @@ export const multiSectionAssessment: AiAssessmentInput = {
     },
     {
       title: 'Geometria',
-      questions: [
+      blocks: [
         {
           kind: 'multiple_choice',
           statement: 'Quantos lados tem um hexágono?',
@@ -83,7 +83,7 @@ export const multiSectionAssessment: AiAssessmentInput = {
     },
     {
       title: 'Problemas',
-      questions: [
+      blocks: [
         {
           kind: 'open_ended',
           statement: 'Calcule a área de um retângulo de lados 3 cm e 5 cm.',
@@ -103,13 +103,13 @@ export const multiSectionAssessment: AiAssessmentInput = {
   ],
 };
 
-export const hostileTextAssessment: AiAssessmentInput = {
+export const hostileTextAssessment: AiContentInput = {
   title: '<script>alert("título")</script> & Cia',
   instructions: 'Use "aspas" & \'apóstrofos\' <b>sem</b> medo.',
   sections: [
     {
       title: 'Seção <img src=x onerror=alert(1)>',
-      questions: [
+      blocks: [
         {
           kind: 'multiple_choice',
           statement: 'Qual tag executa código? </style><script>alert(1)</script>',
@@ -129,12 +129,12 @@ export const hostileTextAssessment: AiAssessmentInput = {
   ],
 };
 
-export const openEndedWithoutLinesAssessment: AiAssessmentInput = {
+export const openEndedWithoutLinesAssessment: AiContentInput = {
   title: 'Redação',
   sections: [
     {
       title: 'Produção de texto',
-      questions: [
+      blocks: [
         {
           kind: 'open_ended',
           statement: 'Descreva o seu bairro em poucas palavras.',

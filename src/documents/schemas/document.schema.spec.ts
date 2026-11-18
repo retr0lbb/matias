@@ -1,14 +1,16 @@
-import { assessmentDocumentSchema } from './document.schema.js';
+import { getDocumentType } from '../types/registry.js';
+
+const assessmentDocumentSchema = getDocumentType('assessment').schemas.document;
 
 const buildDocument = (overrides: Record<string, unknown> = {}) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   content: {
     title: 'Title',
     sections: [
       {
         id: 'sec_1',
         title: 'Section',
-        questions: [
+        blocks: [
           {
             id: 'q_1',
             kind: 'open_ended',
@@ -43,7 +45,7 @@ describe('assessmentDocumentSchema', () => {
   });
 
   it.each([
-    ['the schema version is unknown', { schemaVersion: 2 }],
+    ['the schema version is unknown', { schemaVersion: 3 }],
     ['the content is missing', { content: undefined }],
     ['the header is missing', { header: undefined }],
     ['the theme is missing', { theme: undefined }],

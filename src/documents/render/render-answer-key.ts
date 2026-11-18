@@ -1,35 +1,26 @@
-import type { AssessmentContent } from '../schemas/content.schema.js';
-import { themeSchema, type AssessmentTheme } from '../schemas/theme.schema.js';
+import { definitionOf } from '../blocks/registry.js';
+import type { DocumentContent } from '../schemas/content.schema.js';
+import { themeSchema, type DocumentTheme } from '../schemas/theme.schema.js';
 import { escapeHtml } from './escape-html.js';
-import {
-  alternativeLabel,
-  formatPoints,
-  numberQuestions,
-  totalPoints,
-  type NumberedQuestion,
-} from './layout.js';
+import { formatPoints } from './format.js';
+import { numberBlocks, totalPoints, type NumberedSection } from './layout.js';
 import { renderPage } from './render-html.js';
 
-function renderAnswer({ question, number }: NumberedQuestion): string {
-  const answer =
-    question.kind === 'multiple_choice'
-      ? `${alternativeLabel(question.correctIndex)}) ${escapeHtml(question.alternatives[question.correctIndex])}`
-      : escapeHtml(question.expectedAnswer);
-  const explanation =
-    question.kind === 'multiple_choice' ? question.explanation?.trim() : undefined;
+function renderSectionAnswers({ section, blocks }: NumberedSection): string {
+  // A block without `renderAnswer` is left out; a section left empty is left out too.
+  const entries = blocks
+    .map(({ block, number }) => definitionOf(block.kind).renderAnswer?.(block, number) ?? '')
+    .filter((entry) => entry.length > 0);
+
+  if (entries.length === 0) {
+    return '';
+  }
 
   return [
-    '<article class="question">',
-    '<div class="question-head">',
-    `<span class="question-number">${number}.</span>`,
-    `<div class="question-statement">${escapeHtml(question.statement)}</div>`,
-    `<span class="question-points">(${formatPoints(question.points)})</span>`,
-    '</div>',
-    `<p class="answer-key-answer"><strong>Resposta:</strong> ${answer}</p>`,
-    explanation
-      ? `<p class="answer-key-explanation"><strong>Justificativa:</strong> ${escapeHtml(explanation)}</p>`
-      : '',
-    '</article>',
+    '<section class="section">',
+    `<h2 class="section-title">${escapeHtml(section.title)}</h2>`,
+    entries.join(''),
+    '</section>',
   ].join('');
 }
 
@@ -39,26 +30,21 @@ function renderAnswer({ question, number }: NumberedQuestion): string {
  * from the student's document.
  */
 export function renderAnswerKey(
-  content: AssessmentContent,
-  theme: AssessmentTheme = themeSchema.parse({}),
+  content: DocumentContent,
+  theme: DocumentTheme = themeSchema.parse({}),
+  heading = 'Gabarito',
 ): string {
-  const title = `Gabarito: ${content.title}`;
+  const title = `${heading}: ${content.title}`;
 
-  const sections = numberQuestions(content, theme.numbering)
-    .map(({ section, questions }) =>
-      [
-        '<section class="section">',
-        `<h2 class="section-title">${escapeHtml(section.title)}</h2>`,
-        questions.map(renderAnswer).join(''),
-        '</section>',
-      ].join(''),
-    )
-    .join('');
+  const sections = numberBlocks(content, theme.numbering).map(renderSectionAnswers).join('');
+  const total = totalPoints(content);
 
   const body = [
     '<header class="header">',
     `<h1 class="header-title">${escapeHtml(title)}</h1>`,
-    `<div class="header-meta"><div class="header-field"><span>Valor:</span><span>${formatPoints(totalPoints(content))}</span></div></div>`,
+    total > 0
+      ? `<div class="header-meta"><div class="header-field"><span>Valor:</span><span>${formatPoints(total)}</span></div></div>`
+      : '',
     '</header>',
     sections,
   ].join('');

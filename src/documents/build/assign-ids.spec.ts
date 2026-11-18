@@ -3,24 +3,24 @@ import {
   multiSectionAssessment,
   shortAssessment,
 } from '../__fixtures__/assessments.js';
-import {
-  aiAssessmentSchema,
-  assessmentContentSchema,
-  type AiQuestion,
-} from '../schemas/content.schema.js';
+import type { AiBlock } from '../schemas/content.schema.js';
+import { getDocumentType } from '../types/registry.js';
 import {
   assignIds,
-  assignQuestionId,
+  assignBlockId,
   assignSectionIds,
   type IdGenerator,
 } from './assign-ids.js';
+
+const { aiContent: aiAssessmentSchema, content: assessmentContentSchema } =
+  getDocumentType('assessment').schemas.content;
 
 const createSequentialId = (): IdGenerator => {
   let counter = 0;
   return (prefix) => `${prefix}_${++counter}`;
 };
 
-const multipleChoice: AiQuestion = {
+const multipleChoice: AiBlock = {
   kind: 'multiple_choice',
   statement: 'Statement',
   points: 1,
@@ -28,7 +28,7 @@ const multipleChoice: AiQuestion = {
   correctIndex: 1,
 };
 
-const openEnded: AiQuestion = {
+const openEnded: AiBlock = {
   kind: 'open_ended',
   statement: 'Statement',
   points: 2,
@@ -56,11 +56,11 @@ describe('assign-ids', () => {
 
       const sectionIds = content.sections.map((section) => section.id);
       const questionIds = content.sections.flatMap((section) =>
-        section.questions.map((question) => question.id),
+        section.blocks.map((question) => question.id),
       );
       expect(new Set([...sectionIds, ...questionIds]).size).toBe(9);
       expect(sectionIds.every((id) => id.startsWith('sec_'))).toBe(true);
-      expect(questionIds.every((id) => id.startsWith('q_'))).toBe(true);
+      expect(questionIds.every((id) => id.startsWith('b_'))).toBe(true);
     });
 
     it('should use the given generator when one is provided', () => {
@@ -72,8 +72,8 @@ describe('assign-ids', () => {
         'sec_1',
         'sec_3',
       ]);
-      expect(content.sections[0].questions[0].id).toBe('q_2');
-      expect(content.sections[1].questions[0].id).toBe('q_4');
+      expect(content.sections[0].blocks[0].id).toBe('b_2');
+      expect(content.sections[1].blocks[0].id).toBe('b_4');
     });
 
     it('should preserve content and order when ids are removed again', () => {
@@ -85,7 +85,7 @@ describe('assign-ids', () => {
         title: content.title,
         sections: content.sections.map((section) => ({
           title: section.title,
-          questions: section.questions.map(({ id: _id, ...question }) => question),
+          blocks: section.blocks.map(({ id: _id, ...question }) => question),
         })),
       };
       expect(withoutIds).toEqual(ai);
@@ -119,41 +119,41 @@ describe('assign-ids', () => {
 
   describe('assignSectionIds', () => {
     it('should give the section and each question an id when called', () => {
-      const section = { title: 'Section', questions: [multipleChoice, openEnded] };
+      const section = { title: 'Section', blocks: [multipleChoice, openEnded] };
 
       const result = assignSectionIds(section, createSequentialId());
 
       expect(result).toEqual({
         id: 'sec_1',
         title: 'Section',
-        questions: [
-          { id: 'q_2', ...multipleChoice },
-          { id: 'q_3', ...openEnded },
+        blocks: [
+          { id: 'b_2', ...multipleChoice },
+          { id: 'b_3', ...openEnded },
         ],
       });
     });
   });
 
-  describe('assignQuestionId', () => {
+  describe('assignBlockId', () => {
     it('should copy the alternatives array when the question is multiple choice', () => {
-      const result = assignQuestionId(multipleChoice, createSequentialId());
+      const result = assignBlockId(multipleChoice, createSequentialId());
 
-      expect(result).toEqual({ id: 'q_1', ...multipleChoice });
+      expect(result).toEqual({ id: 'b_1', ...multipleChoice });
       expect(result.kind === 'multiple_choice' && result.alternatives).not.toBe(
         multipleChoice.kind === 'multiple_choice' && multipleChoice.alternatives,
       );
     });
 
     it('should keep every field when the question is open ended', () => {
-      const result = assignQuestionId(openEnded, createSequentialId());
+      const result = assignBlockId(openEnded, createSequentialId());
 
-      expect(result).toEqual({ id: 'q_1', ...openEnded });
+      expect(result).toEqual({ id: 'b_1', ...openEnded });
     });
 
     it('should generate a prefixed id when no generator is given', () => {
-      const result = assignQuestionId(openEnded);
+      const result = assignBlockId(openEnded);
 
-      expect(result.id).toMatch(/^q_[0-9a-f-]{36}$/);
+      expect(result.id).toMatch(/^b_[0-9a-f-]{36}$/);
     });
   });
 });

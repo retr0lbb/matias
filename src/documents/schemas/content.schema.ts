@@ -1,124 +1,85 @@
 import { z } from 'zod/v4';
+import { aiBlockUnion, type BlockKind, storedBlockUnion } from '../blocks/registry.js';
 
-export const DEFAULT_OPEN_ENDED_LINES = 5;
-export const MAX_OPEN_ENDED_LINES = 30;
-export const MAX_EXPLANATION_LENGTH = 1000;
-
-// Shapes are kept unrefined so the AI schema (no ids) and the stored schema
-// (with ids) are built from the same fields; refinements are applied last.
-const multipleChoiceShape = {
-  kind: z.literal('multiple_choice'),
-  statement: z.string().min(1),
-  points: z.number().positive(),
-  alternatives: z.array(z.string().min(1)).min(2).max(5),
-  correctIndex: z.number().int().min(0),
-  // Why the correct alternative is right; shown only in the answer key.
-  // Optional so manual edits and documents saved before it stay valid; the
-  // AI is told to always write it.
-  explanation: z.string().max(MAX_EXPLANATION_LENGTH).optional(),
-};
-
-const openEndedShape = {
-  kind: z.literal('open_ended'),
-  statement: z.string().min(1),
-  points: z.number().positive(),
-  expectedAnswer: z.string(),
-  lines: z
-    .number()
-    .int()
-    .min(0)
-    .max(MAX_OPEN_ENDED_LINES)
-    .default(DEFAULT_OPEN_ENDED_LINES),
-};
+export type { AiBlock, AiBlockInput, Block } from '../blocks/registry.js';
 
 const idShape = { id: z.string().min(1) };
 
-function withValidCorrectIndex<
-  T extends z.ZodType<{ correctIndex: number; alternatives: string[] }>,
->(schema: T) {
-  return schema.superRefine((value, context) => {
-    if (value.correctIndex > value.alternatives.length - 1) {
-      context.addIssue({
-        code: 'custom',
-        message: 'A resposta correta esta fora da posição maxima do array',
-        path: ['correctIndex'],
-      });
-    }
-  });
-}
-
-// What the AI generates: no ids, no numbering, no totals.
-
-export const aiQuestionSchema = z.discriminatedUnion('kind', [
-  withValidCorrectIndex(z.object(multipleChoiceShape)),
-  z.object(openEndedShape),
-]);
-
-export const aiSectionSchema = z.object({
-  title: z.string().min(1),
-  questions: z.array(aiQuestionSchema).min(1),
-});
-
-export const aiAssessmentSchema = z.object({
-  title: z.string().min(1),
-  instructions: z.string().optional(),
-  sections: z.array(aiSectionSchema).min(1),
-});
-
-// What the server stores: the same content plus server-generated ids.
-
-export const questionSchema = z.discriminatedUnion('kind', [
-  withValidCorrectIndex(z.object({ ...idShape, ...multipleChoiceShape })),
-  z.object({ ...idShape, ...openEndedShape }),
-]);
-
-export const sectionSchema = z.object({
-  ...idShape,
-  title: z.string().min(1),
-  questions: z.array(questionSchema).min(1),
-});
-
-export const assessmentContentSchema = z
-  .object({
+/**
+ * Content schemas for the given block kinds. Every kind is one self-contained
+ * file in `blocks/`; a document type (see `types/`) only chooses which ones it allows.
+ */
+export function createContentSchemas(kinds: readonly BlockKind[]) {
+  // What the AI generates: no ids, no numbering, no totals.
+  const aiBlock = aiBlockUnion(kinds);
+  const aiSection = z.object({
     title: z.string().min(1),
-    instructions: z.string().optional(),
-    sections: z.array(sectionSchema).min(1),
-  })
-  .superRefine((value, context) => {
-    const seen = new Set<string>();
-
-    const check = (id: string, path: PropertyKey[]) => {
-      if (seen.has(id)) {
+    blocks: z.array(aiBlock).min(1),
+  });
+  const aiContent = z
+    .object({
+      title: z.string().min(1),
+      instructions: z.string().optional(),
+      sections: z.array(aiSection),
+      // Instead of a document: one question for the teacher when neither the
+      // request nor the conversation says what the document is about.
+      clarification: z.string().min(1).max(500).optional(),
+    })
+    .superRefine((value, context) => {
+      if (value.sections.length === 0 && !value.clarification) {
         context.addIssue({
           code: 'custom',
-          message: `Id duplicado: ${id}`,
-          path,
+          message: 'Write at least one section, or a clarification question when the subject is unknown',
+          path: ['sections'],
         });
       }
-      seen.add(id);
-    };
+    });
 
-    value.sections.forEach((section, sectionIndex) => {
-      check(section.id, ['sections', sectionIndex, 'id']);
-      section.questions.forEach((question, questionIndex) => {
-        check(question.id, [
-          'sections',
-          sectionIndex,
-          'questions',
-          questionIndex,
-          'id',
-        ]);
+  // What the server stores: the same content plus server-generated ids.
+  const block = storedBlockUnion(kinds);
+  const section = z.object({
+    ...idShape,
+    title: z.string().min(1),
+    blocks: z.array(block).min(1),
+  });
+  const content = z
+    .object({
+      title: z.string().min(1),
+      instructions: z.string().optional(),
+      sections: z.array(section).min(1),
+    })
+    .superRefine((value, context) => {
+      const seen = new Set<string>();
+
+      const check = (id: string, path: PropertyKey[]) => {
+        if (seen.has(id)) {
+          context.addIssue({
+            code: 'custom',
+            message: `Id duplicado: ${id}`,
+            path,
+          });
+        }
+        seen.add(id);
+      };
+
+      value.sections.forEach((entry, sectionIndex) => {
+        check(entry.id, ['sections', sectionIndex, 'id']);
+        entry.blocks.forEach((item, blockIndex) => {
+          check(item.id, ['sections', sectionIndex, 'blocks', blockIndex, 'id']);
+        });
       });
     });
-  });
+
+  return { aiBlock, aiSection, aiContent, block, section, content };
+}
+
+export type ContentSchemas = ReturnType<typeof createContentSchemas>;
 
 /** AI output after validation (defaults applied). */
-export type AiAssessment = z.infer<typeof aiAssessmentSchema>;
+export type AiContent = z.infer<ContentSchemas['aiContent']>;
 /** AI output before validation (`lines` may be missing). */
-export type AiAssessmentInput = z.input<typeof aiAssessmentSchema>;
-export type AiQuestion = z.infer<typeof aiQuestionSchema>;
-export type AiSection = z.infer<typeof aiSectionSchema>;
+export type AiContentInput = z.input<ContentSchemas['aiContent']>;
+export type AiSection = z.infer<ContentSchemas['aiSection']>;
 
-export type AssessmentContent = z.infer<typeof assessmentContentSchema>;
-export type Question = z.infer<typeof questionSchema>;
-export type Section = z.infer<typeof sectionSchema>;
+export type DocumentContent = z.infer<ContentSchemas['content']>;
+export type Section = z.infer<ContentSchemas['section']>;

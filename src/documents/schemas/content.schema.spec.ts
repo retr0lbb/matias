@@ -6,9 +6,11 @@ import {
 import {
   DEFAULT_OPEN_ENDED_LINES,
   MAX_OPEN_ENDED_LINES,
-  aiAssessmentSchema,
-  assessmentContentSchema,
-} from './content.schema.js';
+} from '../blocks/open-ended.block.js';
+import { getDocumentType } from '../types/registry.js';
+
+const { aiContent: aiAssessmentSchema, content: assessmentContentSchema } =
+  getDocumentType('assessment').schemas.content;
 
 const buildMultipleChoice = (overrides: Record<string, unknown> = {}) => ({
   kind: 'multiple_choice',
@@ -29,7 +31,7 @@ const buildOpenEnded = (overrides: Record<string, unknown> = {}) => ({
 
 const buildAi = (question: Record<string, unknown>) => ({
   title: 'Title',
-  sections: [{ title: 'Section', questions: [question] }],
+  sections: [{ title: 'Section', blocks: [question] }],
 });
 
 const buildContent = (
@@ -39,7 +41,7 @@ const buildContent = (
   sections: sections.map((section) => ({
     id: section.id,
     title: 'Section',
-    questions: section.questionIds.map((id) => ({ id, ...buildOpenEnded() })),
+    blocks: section.questionIds.map((id) => ({ id, ...buildOpenEnded() })),
   })),
 });
 
@@ -82,7 +84,7 @@ describe('aiAssessmentSchema', () => {
   it('should reject a section when it has no questions', () => {
     const result = aiAssessmentSchema.safeParse({
       title: 'Title',
-      sections: [{ title: 'Section', questions: [] }],
+      sections: [{ title: 'Section', blocks: [] }],
     });
 
     expect(result.success).toBe(false);
@@ -137,7 +139,7 @@ describe('aiAssessmentSchema', () => {
       expect(result.error?.issues).toEqual([
         expect.objectContaining({
           code: 'custom',
-          path: ['sections', 0, 'questions', 0, 'correctIndex'],
+          path: ['sections', 0, 'blocks', 0, 'correctIndex'],
         }),
       ]);
     });
@@ -158,7 +160,7 @@ describe('aiAssessmentSchema', () => {
     it('should default lines when the AI omits it', () => {
       const result = aiAssessmentSchema.parse(openEndedWithoutLinesAssessment);
 
-      expect(result.sections[0].questions[0]).toMatchObject({
+      expect(result.sections[0].blocks[0]).toMatchObject({
         kind: 'open_ended',
         lines: DEFAULT_OPEN_ENDED_LINES,
       });
@@ -171,7 +173,7 @@ describe('aiAssessmentSchema', () => {
           buildAi(buildOpenEnded({ lines })),
         );
 
-        expect(result.sections[0].questions[0]).toMatchObject({ lines });
+        expect(result.sections[0].blocks[0]).toMatchObject({ lines });
       },
     );
 
@@ -214,7 +216,7 @@ describe('assessmentContentSchema', () => {
       sections: [
         {
           title: 'Section',
-          questions: [{ id: 'q_1', ...buildOpenEnded() }],
+          blocks: [{ id: 'q_1', ...buildOpenEnded() }],
         },
       ],
     };
@@ -227,7 +229,7 @@ describe('assessmentContentSchema', () => {
   it('should reject a question when its id is missing', () => {
     const content = {
       title: 'Title',
-      sections: [{ id: 'sec_1', title: 'Section', questions: [buildOpenEnded()] }],
+      sections: [{ id: 'sec_1', title: 'Section', blocks: [buildOpenEnded()] }],
     };
 
     const result = assessmentContentSchema.safeParse(content);
@@ -255,7 +257,7 @@ describe('assessmentContentSchema', () => {
     expect(result.error?.issues).toEqual([
       expect.objectContaining({
         code: 'custom',
-        path: ['sections', 1, 'questions', 0, 'id'],
+        path: ['sections', 1, 'blocks', 0, 'id'],
       }),
     ]);
   });
@@ -281,7 +283,7 @@ describe('assessmentContentSchema', () => {
         {
           id: 'sec_1',
           title: 'Section',
-          questions: [{ id: 'q_1', ...buildMultipleChoice({ correctIndex: 3 }) }],
+          blocks: [{ id: 'q_1', ...buildMultipleChoice({ correctIndex: 3 }) }],
         },
       ],
     };

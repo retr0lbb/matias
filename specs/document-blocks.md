@@ -1,104 +1,204 @@
-# Plan: block-based documents (scalable JSON → HTML)
+# Plan: generic documents (blocks + types) with conversation context
 
-## Context
+Single source of truth for the documents module. `specs/document-generation.md` (the first plan, in
+Portuguese) is history; `specs/document-credits.md` covers quota.
 
-The document module only knows "assessment": the content schema, renderer, answer key, patch operations and AI prompt each hard-code `multiple_choice | open_ended` (33 references in 10 files). Adding a field kind today means editing all of them; adding a document type means copying the module.
+## Status
 
-Decisions taken with you:
+| Phase | State |
+|---|---|
+| 1. Block registry, content schema v2 | done (not committed) |
+| 2. Document types as presets, table rename | done (not committed) |
+| 2b. Group work type + research/deliverable/rubric blocks | done (not committed) |
+| 3. Conversation context, RAG, chat memory | done (not committed) |
+| 4. Prompts and the AI service | **next** |
+| 5. Verification | revised below |
 
-- **One block model.** Every document is header + theme + sections of **blocks**. A block kind is one self-contained file. A document type is a small preset.
-- **This round:** the architecture, the two existing kinds moved onto it, plus two new kinds as proof (`drawing_area`, `text`). Only the `assessment` type exists, but nothing outside its preset may assume it.
-- **Rename freely:** nothing consumes the current names.
-- **Later, not now:** image blocks (need upload storage), rubric block, homework type, micro templates.
+### Where we stopped (2026-11-18)
 
-## Step 0 — record the current state (before any code)
+- **Last thing done:** Phase 3, finished and verified. Nothing of Phases 1–3 is committed: branch
+  `feat/document-generation`, last commit `32ee496`, 30 modified files plus new `src/conversation/`,
+  `src/documents/blocks/`, `src/documents/types/`, `src/documents/render/format.ts` and two migrations
+  (`20261118182314_document_types`, `20261118185838_group_work_type`).
+- **Next step:** Phase 4 (section 5), in this order:
+  1. split `src/ai/constants/prompts.ts` into exported pieces (identity intro, *Comunicação* rules,
+     `RETRIEVAL_FULL`, `DOCGEN_FULL`) without changing the chat's prompt text;
+  2. build the document persona from them (`RETRIEVAL_FULL` only when chunks were retrieved);
+  3. `request()` returns `{ text, finishReason, usage, modelVersion, latencyMs }`; `MAX_TOKENS` → 502
+     without a retry; usage stored on the chat message `recordTurn` writes (tokens are 0 today);
+  4. the Gemini 400 fallback (JSON mode with the schema in the instructions);
+  5. then Phase 5.
+- **Waiting on you:**
+  - run `npm run db:migrate` (two new migrations; not run on your DB);
+  - review the four draft prompts in `src/documents/types/*.prompt.ts`;
+  - try the real model: the OOP chat followed by "com base na conversa, crie a prova" with that
+    `conversationId`, and a group work (largest Gemini schema so far, untested on the real model);
+  - `pnpm approve-builds` and `npx playwright install chromium` if not done yet;
+  - the frontend changes: routes `/documents/...`, `type`, `header.extra`, `NEEDS_CLARIFICATION`,
+    `refreshContext`, `/usage` key `documentGeneration`.
 
-1. Add a section **"7. Estado atual, mudanças e pendências"** to `specs/document-generation.md` (in Portuguese, like the file):
-   - **Estado:** Fases 0–4 feitas (4 ainda sem commit); 5 (DOCX) e 6 (fluxo e2e) pendentes.
-   - **Mudanças em relação ao plano:**
-     - rota de debug removida;
-     - `POST` aceita `header`/`theme`;
-     - `/answer-key` devolve PDF e existe `/answer-key/preview`;
-     - colunas `prompt` e `ai_revisions`; `regenerate` aceita `prompt` opcional;
-     - dono errado responde 404, não 403;
-     - `revise` usa modo JSON sem `responseJsonSchema`;
-     - modelo `gemini-3.5-flash`;
-     - cota: 30 créditos/ciclo, 7 mudanças por IA por crédito, patch manual grátis;
-     - fases 1–4 sem specs unitários (ficaram com você);
-     - `specs/document-builder.md` removido.
-   - **A investigar:**
-     - Gemini responde 400 ao schema de patch. Sabemos: união com 1 operação passa, com 4 operações simples falha; trocar o formato de `nullable` ou remover grupos de operações não resolveu; `oneOf`→`anyOf` não chegou a ser testado. A união de 2 tipos de questão da geração funciona.
-     - `revise` nunca rodou contra o modelo real (só com cliente simulado).
-     - Free tier: 20 requisições/dia por modelo; `gemini-3.8-flash` devolveu 503/504.
-     - Cota: mudanças extras em documento de ciclo anterior não são cobradas (precisa de ledger); confirmar a leitura da regra dos 7.
-     - Limite de 100 KB do JSON do Express contra logo de até 300 mil caracteres.
-     - `ZodValidationPipe` responde "Validation failed" sem detalhes (ruim para `PATCH`).
-     - Tokens gastos pela IA em documentos não são registrados.
-     - `POST /auth/register` devolve `passwordHash`.
-     - Specs de `auth` quebrados (3 erros de `tsc`).
-     - A conta do `_test.http` não existe no banco local.
-2. Save this plan as `specs/document-blocks.md`.
+Verified so far, each round: `tsc`, `lint`, the 89 existing document specs, throwaway checks (deleted),
+assessment HTML and answer key **byte-identical** to the original code (24 cases), every migration applied
+on a throwaway Postgres (your `educacional_postgres` untouched, `db:migrate` never run). You confirmed real
+Gemini generation still works after Phase 1.
 
-## Step 1 — block kinds as self-contained files
+## 1. What the first review found (all still true until Phase 3 unless marked fixed)
 
-New folder `src/documents/blocks/`:
+1. **Geography test.** `generate()` only *stores* `conversationId`; the model gets only the request text.
+   No history, no RAG, so "based on the conversation" has nothing to be based on. `regenerate` too.
+2. **Prompt.** The module doesn't use the chat's prompt builder; your rules (sources, exam questions)
+   had no fields to land in. *Fixed in Phase 1:* `reference` and `sources` on questions.
+3. **Hard-coded for tests.** *Fixed in Phases 1–2.*
+4. **Output budget and visibility.** *Budget per type: fixed in Phase 2.* `request()` still returns only
+   text, so `MAX_TOKENS` looks like invalid JSON, and document token usage is not recorded (Phase 4).
+5. **No code blocks.** *Fixed in Phase 1.*
+6. **Get-or-create conversation duplicated** in `AiService` (twice) and `DocumentsService` (Phase 3).
 
-- `block.ts`: `defineBlock({...})` and its types. A definition holds:
-  - `kind`, `shape` (Zod fields, unrefined), optional `refine` (cross-field rules such as `correctIndex`);
-  - `scored`: true = numbered question with `statement` + `points`; false = content block (not numbered, no points);
-  - `renderHtml(block, { number })`, optional `renderAnswer(block, { number })` (absent = left out of the answer key);
-  - `css` (only that block's rules) and `aiGuide` (the lines the prompt needs about that kind).
-  - `defineBlock` derives `aiSchema` (no id) and `storedSchema` (with id) the way `content.schema.ts` does today.
-- `multiple-choice.block.ts`, `open-ended.block.ts`: today's shapes, HTML, answer output, CSS and prompt lines moved from `content.schema.ts`, `render-html.ts`, `render-answer-key.ts`, `styles.ts`, `assessment-ai.service.ts`.
-- `drawing-area.block.ts` (scored): `statement`, `points`, `heightMm` (20–200, default 60), optional `expectedAnswer`. Renders a bordered blank box.
-- `text.block.ts` (not scored): optional `title`, `body`. Reading passage / notice.
-- `registry.ts`: the list of kinds; exports the AI and stored discriminated unions, `definitionOf(kind)`, the concatenated block CSS, and `aiGuideFor(kinds)`.
+## 2. Model
 
-Adding a field kind afterwards = one new file + one line in `registry.ts`.
+- **Five types** (presets in `src/documents/types/`):
 
-## Step 2 — content schema v2
+  | type | label | blocks | answer key | header student fields | budget |
+  |---|---|---|---|---|---|
+  | assessment | Avaliação | multiple_choice, open_ended, text, code | Gabarito | name, date, class, score | 16k |
+  | homework | Tarefa | multiple_choice, open_ended, text, list, code | Gabarito | name, date, class | 16k |
+  | lesson_plan | Plano de aula | text, list, table | — | — | 8k |
+  | course_syllabus | Plano de ensino | text, list, table | — | — | 16k |
+  | group_work | Trabalho em grupo | text, list, table, research_task, deliverable, rubric | Guia de correção | group members, date, class, score | 16k |
 
-- `schemas/content.schema.ts`: `sections[].questions` → `sections[].blocks`, built from the registry unions. Duplicate-id check stays.
-- `schemas/document.schema.ts`: `schemaVersion: 2`; add `upgradeDocument(raw)` (v1 → v2 renames `questions` → `blocks`), called in the service before parsing, so stored rows keep working and are rewritten as v2 on their next save.
-- `build/assign-ids.ts`: generic over blocks (`assignBlockId`, `assignSectionIds`, `assignIds`); id prefix `q` → `b`.
+- **Nine block kinds** (`src/documents/blocks/`, one file each, listed in `registry.ts`):
+  - scored (numbered questions, `statement`, `points`, `reference?`, `sources?`): `multiple_choice`
+    (+ `explanation`), `open_ended`;
+  - content: `text`, `list`, `table`, `code`;
+  - group work: `research_task` (question, topics, guiding questions, suggested sources, citation style;
+    teacher-only `expectedFindings`), `deliverable` (format, description, length, required sections,
+    formatting; teacher-only `expectedOutline`), `rubric` (criteria with points and description;
+    teacher-only `guidance`).
+- A block may add **points without being a question** (`pointsOf`): the rubric's criteria are a group
+  work's value, so "Valor" and "Nota: __ / N" work the same as for a test.
+- **Teacher-only fields** are rendered only in the answer key. For group work that document is the
+  *Guia de correção*: expected findings, expected outline per part, grading guidance per criterion.
+- **Header:** `extra` labelled values (teacher-set); `groupMembers` prints 5 blank "Integrantes" lines.
+  Both optional with no default, so stored documents parse unchanged.
 
-## Step 3 — rendering through the registry
+## 3. Revisions to the plan (made in this review, before Phase 3)
 
-- `render/layout.ts`: `numberQuestions` → `numberBlocks`: only `scored` blocks get a number and count toward `totalPoints`.
-- `render/render-html.ts`: keeps the page shell, header and section; each block goes through `definitionOf(block.kind).renderHtml`. `renderQuestionHead` becomes a shared helper for scored blocks.
-- `render/render-answer-key.ts`: uses `renderAnswer`; blocks without it are skipped.
-- `render/styles.ts`: base CSS (page, header, section, question head) + registry CSS.
-- Header rendering stays one function fed by a plain view model (title, total, fields). That is the seam for the future micro templates; nothing more is built for them now.
+1. **"No guessing topics" no longer uses a root union.** Gemini has only been proven with unions *inside*
+   the document. Instead the AI content gets one optional top-level `clarification` string; a Zod refine
+   requires either a clarification or at least one section. With a clarification the API answers 422
+   `NEEDS_CLARIFICATION { question }`, spends no credit, stores nothing. Lower risk, same behavior.
+2. **No `source` snapshot column.** It would copy chat text into `documents`, and that copy would outlive
+   a deleted conversation. `regenerate` instead re-reads the conversation **as it was** when the document
+   was created (messages older than `documents.created_at`); `refreshContext: true` reads it as it is now.
+   Same stability, no duplicated data, no migration.
+3. **History is not "data".** Earlier turns hold the teacher's own requirements ("10 questões, nível
+   médio"), so the prompt treats history as *context the request may refer to*. Only **retrieved RAG
+   documents** are data-not-instructions (the prompt-injection boundary, as `RETRIEVAL_FULL` already says).
+4. **Conversation title.** The judge titles a conversation only when its history is empty, so a document
+   generated first would leave it untitled forever. When the conversation has no title, the document's
+   title becomes it.
+5. **What the chat remembers.** `generate` and `regenerate` record a USER + IA message pair; `revise`
+   records nothing (ten small edits would fill the 20-message window and push the real conversation out).
+   Note the limit: the chat then *knows* the document exists but cannot *edit* it; editing from the chat
+   needs tools (the judge already returns a `tools` field) and is out of this round.
+6. **History selection.** USER messages and IA messages with status COMPLETED (aborted or failed stream
+   answers are partial and would mislead). Retrieved chunks get a character cap (24k) besides the count
+   (12), since chunk size is set in tokens by the chunker.
+7. **`revise` gets the same context as `generate`** (history + chunks): "add a question about what we
+   discussed" needs the history too.
+8. **Prompt language.** Type prompts stay in English (the assessment one is word for word what worked);
+   your detailed Portuguese rules are imported from `src/ai/constants/prompts.ts` and not duplicated.
 
-## Step 4 — patch and AI follow the blocks
+## 4. Phase 3: conversation context, RAG and chat memory
 
-- `schemas/patch.schema.ts` + `patch/apply-patch.ts`: `replace_question / insert_question / remove_question / move_question` → `replace_block / insert_block / remove_block / move_block` (`blockId`, `afterBlockId`). Logic unchanged.
-- `ai/` service: prompts are assembled from a type's own text + `aiGuideFor(allowedBlocks)`; the Gemini schema comes from the type's AI schema.
-- Because the patch union was rejected with 400 and the block union is now growing, `request()` gets one fallback: on a 400 for a structured call, retry in JSON mode with the schema in the instructions (the path `revise` already uses) and remember it for that schema. Zod stays the gate in both paths.
+- New `src/conversation/` (module + `ConversationContextService`, imports `RagModule`):
+  - `getOrCreate(userId, conversationId?)`: UUID check, 403 on someone else's, creates when missing.
+  - `loadHistory(conversationId, { before?, limit: 20, maxCharsPerMessage: 6000, maxTotalChars: 40000 })`,
+    newest kept, selection as in revision 6; `before` is the regenerate cut-off (revision 2).
+  - `retrieve({ query, userId, conversationId, limit: 12, maxChars: 24000 })` (today's private
+    `AiService.retrieveContext`; `RagService.search` gets an optional `limit`).
+  - `recordTurn(executor, { conversationId, userContent, iaContent, metadata, tokens })`; sets the
+    conversation title when it has none (revision 4).
+- `AiService.chat/prepareStream` delegate to it (mechanical extraction, no behavior change);
+  `DocumentsService.assertConversationAccess` is replaced.
+- Retrieval query = conversation title + last two user messages + request (≤ 1000 chars), because "based on
+  the conversation" alone is a useless embedding query. Skipped when the conversation has no READY documents.
+- `generate` flow: allowance/thinking checks → `getOrCreate` → history + chunks → model → clarification
+  (422) or document → transaction: lock, quota, insert row, ledger row, `recordTurn`.
+- Model input becomes labelled parts: conversation history (context), retrieved documents (data), then
+  the teacher's request.
+- Recorded chat wording is built deterministically, e.g. `Criei a avaliação «Título» com N questões
+  (X pontos).` / `Criei o trabalho em grupo «Título» (X pontos).` `MessageMetadata` gains `documentId?`,
+  `documentType?`; `tier` becomes optional; `expense` stays null so it never counts as a model message.
 
-## Step 5 — document types as presets
+## 5. Phase 4: prompts and the AI service
 
-- `src/documents/types/document-type.ts`: `DocumentTypeDefinition` = `type`, `label`, `allowedBlocks`, `hasAnswerKey`, `showsScore` (header "Valor"/"Nota"), AI generation text.
-- `types/assessment.type.ts`: today's behavior as the first preset (all four kinds allowed). `types/registry.ts`: lookup by `type`.
-- The schema for a type = shared document schema + "block kind allowed for this type".
-- Table `assessments` → `documents` with a `type` column (`src/db/schemas/document.ts`, new migration).
-- Routes `/documents/assessments/...` → `/documents/...`; `POST /documents` takes `type` (default `assessment`). Service/controller/module renamed to `Documents*`; folder `src/documents/assessment/*` flattens into `src/documents/*`.
-- Quota names follow: `assessmentsPerCycle` → `documentsPerCycle`, code `DOCUMENTS_PER_CYCLE`, `/usage` key `documents` (`src/usage/plans.ts`, `usage.service.ts`, `quota-exceeded.exception.ts`).
-- `_test.http` updated to the new routes and op names.
+- System prompt per type = identity from `prompts.ts` (`IDENTITY_INTRO` + the *Comunicação* rules of
+  `IDENTITY_FULL`, except the clarifying-question rule, which becomes the `clarification` field) +
+  `DOCGEN_FULL` for types with questions + `RETRIEVAL_FULL` when chunks were retrieved + the type prompt +
+  `aiGuideFor(blocks)` + context rules (revision 3) + structural rules. `prompts.ts` exports the pieces
+  instead of one block of text.
+- `request()` returns `{ text, finishReason, usage, modelVersion, latencyMs }`: `MAX_TOKENS` becomes a clear
+  502 without a wasted retry; usage goes into the recorded chat message.
+- Gemini 400 fallback stays: retry in JSON mode with the schema in the instructions, remember it per schema.
+  Watch the group-work schema: six kinds with nested objects is the largest union so far.
+- You review the four draft prompts (`homework`, `lesson_plan`, `course_syllabus`, `group_work`).
 
-## Things that need your OK (they touch your territory)
+## 6. Phase 5: verification
 
-- **Existing spec files** (`content.schema.spec.ts`, `assign-ids.spec.ts`, `document.schema.spec.ts`, ...) reference `questions` and the old paths, so they break on the rename. I will move them with their source and apply only the mechanical renames; I will not add or redesign tests. The Chromium e2e spec gets the same treatment plus the two new kinds in its fixtures.
-- **Migration for the table rename:** `drizzle-kit generate` asks interactively whether a table was renamed. If it cannot be answered from here, I will ask you to run it.
+- `tsc` (only the 3 known auth-spec errors), `lint`, `drizzle-kit check`, document specs.
+- Chromium e2e fixtures: one document per type (group work included); look at the PDFs.
+- Throwaway checks (deleted): the geography regression with a stubbed Gemini (request contents include the
+  OOP conversation and the chunks; empty context → `NEEDS_CLARIFICATION`); regenerate reads only messages
+  older than the document; revise records nothing in the chat; title set on an untitled conversation.
+- A real-model run per type if the free-tier quota allows; otherwise stated as stubbed. `npm test` not run
+  (auth specs broken, per your instruction). No new spec files unless you ask (AGENTS.md).
 
-## Not in this round
+## 7. Risks
 
-Image block and upload storage, rubric block, homework type, micro templates, DOCX (Phase 5), flow e2e (Phase 6), and the investigations listed in Step 0 other than the AI fallback above.
+- **Recalled, unverifiable references.** Exam questions (`reference`) and group-work suggested sources come
+  from the model's memory. The prompts tell it to cite only what it is certain exists and never invent links,
+  and both are visible to the teacher. Web grounding could verify them; untested with JSON output.
+- **History cost:** up to 40k characters of history + 24k of chunks per generation.
+- **Group members lines** are a fixed 5; a group-size field can come later if needed.
 
-## Verification
+## 8. Not in this round
 
-- `npx tsc --noEmit` (only the 3 known auth errors) and `npm run lint`.
-- `npm run test:e2e` (Chromium): existing fixtures plus one with `drawing_area` and `text`; check page count, text present, answers absent, and look at the PDFs written to `.tmp/assessment-pdf`.
-- Throwaway checks, deleted afterwards (as in Phase 4): every patch op on v2 content; a stored v1 document upgrades and renders identically to before; a block kind not allowed by the type is rejected.
-- Local server smoke test over HTTP without the AI where possible (manual `PATCH` inserting a `drawing_area` and a `text` block, preview, PDF, answer key, 409/422/404). Generation and `revise` against the real model only if the Gemini quota has reset; otherwise with the stubbed client, stated as such.
-- `npm test` is not run (your instruction); moved spec files are run individually only to confirm the mechanical renames compile.
+DOCX, flow e2e, image blocks, editing documents from the chat (tools), micro templates, the Express 100 KB
+JSON limit vs the 300k-character logo, `ZodValidationPipe` error detail, `passwordHash` in
+`POST /auth/register`, the 22 already-failing subscription specs.
+
+## Appendix: how Phase 3 deviated from what was planned
+
+- The **context rules** (conversation = context, documents = data, ask instead of inventing) went into the
+  prompt now, not in Phase 4: the clarification can't work without them. Phase 4 still rebuilds the persona
+  from `prompts.ts`. Without any context the request is sent alone, exactly as before; the system prompt
+  gained a short "Context:" section for every type.
+- One clock for a new document and its chat messages (`createdAt` set by the server; USER at that time,
+  IA 1 ms later), so the regenerate cut-off excludes the document's own messages exactly and the chat shows
+  the pair in order (inside one transaction Postgres `now()` doesn't move).
+- A `conversationId` that doesn't exist yet is created (same rule as the chat), also when the answer turns
+  out to be a clarification; it stays empty.
+- The documents module now answers someone else's conversation with the chat's 403 text ("Not your chat pal").
+- The chat is unchanged (same queries, same 403/400 texts); only its RAG log lines now come from
+  `ConversationContextService`.
+- Verified on a throwaway Postgres with all 21 migrations (real SQL, stubbed Gemini and RAG): the OOP
+  conversation and the chunks reach the model, an aborted answer doesn't; the turn is written back with the
+  document id, no `expense`, and the chat quota stays 0; the title is set once; regenerate reads the chat as
+  it was and `refreshContext` as it is; revise writes nothing; no subject → 422 with nothing stored and no
+  credit; someone else's conversation → 403; no conversation → request alone; and the Nest modules resolve.
+
+## Appendix: how Phases 1–2b deviated from what was planned
+
+- Scored kinds use `defineScoredBlock` (adds `statement`, `points`, `reference`, `sources`), content kinds
+  `defineContentBlock`. `code` blocks stay in the answer key; `text`/`list`/`table` don't, and an empty
+  section is left out.
+- `render/format.ts` was split out of `layout.ts` to avoid an import cycle with the blocks.
+- "Valor" is derived (shown when the document has points), not a preset flag.
+- The patch request body accepts every block kind (the type isn't known yet when it is validated);
+  `applyPatch(document, ops, type)` rejects what the type doesn't allow. The AI patch schema is per type.
+- Fixed along the way: exam citations were also requested inside the statement (would print twice);
+  a misplaced prompt bullet; header labels weren't HTML-escaped (they now come from the request).
+- Migrations: `20261118182314_document_types` (hand-written rename, snapshot grafted from a fresh
+  generate) and `20261118185838_group_work_type` (`ALTER TYPE ... ADD VALUE`). `generate` reports no
+  pending changes.

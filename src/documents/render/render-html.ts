@@ -1,29 +1,22 @@
-import type {
-  AssessmentContent,
-  Question,
-} from '../schemas/content.schema.js';
-import type { AssessmentHeader } from '../schemas/header.schema.js';
-import type { AssessmentTheme } from '../schemas/theme.schema.js';
+import { definitionOf } from '../blocks/registry.js';
+import type { DocumentContent } from '../schemas/content.schema.js';
+import type { DocumentHeader, StudentField } from '../schemas/header.schema.js';
+import type { DocumentTheme } from '../schemas/theme.schema.js';
 import { escapeHtml } from './escape-html.js';
+import { formatNumber, formatPoints } from './format.js';
 import {
-  alternativeLabel,
-  formatNumber,
-  formatPoints,
-  numberQuestions,
+  numberBlocks,
   totalPoints,
-  type NumberedQuestion,
+  type NumberedBlock,
   type NumberedSection,
 } from './layout.js';
 import { buildCss } from './styles.js';
-
-type MultipleChoice = Extract<Question, { kind: 'multiple_choice' }>;
-type OpenEnded = Extract<Question, { kind: 'open_ended' }>;
 
 /** Wraps a rendered body in the page shell shared by the test and its answer key. */
 export function renderPage(
   title: string,
   body: string,
-  theme: AssessmentTheme,
+  theme: DocumentTheme,
 ): string {
   return [
     '<!DOCTYPE html>',
@@ -43,18 +36,30 @@ export function renderPage(
 
 function renderBlankField(label: string, wide = false): string {
   const className = wide ? 'header-field header-field--wide' : 'header-field';
-  return `<div class="${className}"><span>${label}:</span><span class="header-blank"></span></div>`;
+  return `<div class="${className}"><span>${escapeHtml(label)}:</span><span class="header-blank"></span></div>`;
 }
 
 function renderFilledField(label: string, value: string): string {
-  return `<div class="header-field"><span>${label}:</span><span>${escapeHtml(value)}</span></div>`;
+  return `<div class="header-field"><span>${escapeHtml(label)}:</span><span>${escapeHtml(value)}</span></div>`;
+}
+
+/** Blank lines printed for the names of a group. */
+const GROUP_MEMBER_LINES = 5;
+
+/** What a document type allows in the header. */
+export interface HeaderLayout {
+  /** Blank fields the student may be asked to fill in; none for a plan. */
+  studentFields: readonly StudentField[];
 }
 
 export function renderHeader(
-  header: AssessmentHeader,
+  header: DocumentHeader,
   title: string,
   total: number,
+  layout: HeaderLayout,
 ): string {
+  const has = (field: StudentField) => layout.studentFields.includes(field);
+
   const brand: string[] = [];
   if (header.logo) {
     brand.push(
@@ -74,23 +79,41 @@ export function renderHeader(
   if (header.subject) {
     meta.push(renderFilledField('Disciplina', header.subject));
   }
-  meta.push(
-    `<div class="header-field"><span>Valor:</span><span>${formatPoints(total)}</span></div>`,
-  );
+  // A document without student fields has nowhere else to show the class.
+  if (!has('className') && header.className) {
+    meta.push(renderFilledField('Turma', header.className));
+  }
+  for (const { label, value } of header.extra ?? []) {
+    meta.push(renderFilledField(label, value));
+  }
+  // Only documents with questions have a value.
+  if (total > 0) {
+    meta.push(
+      `<div class="header-field"><span>Valor:</span><span>${formatPoints(total)}</span></div>`,
+    );
+  }
 
   const fields: string[] = [];
-  if (header.fields.studentName) {
+  if (has('studentName') && header.fields.studentName) {
     fields.push(renderBlankField('Nome', true));
   }
-  if (header.className) {
-    fields.push(renderFilledField('Turma', header.className));
-  } else if (header.fields.className) {
-    fields.push(renderBlankField('Turma'));
+  if (has('groupMembers') && header.fields.groupMembers !== false) {
+    const lines = '<span class="header-blank"></span>'.repeat(GROUP_MEMBER_LINES);
+    fields.push(
+      `<div class="header-field header-field--wide header-members"><span>Integrantes:</span><div class="header-member-lines">${lines}</div></div>`,
+    );
   }
-  if (header.fields.date) {
+  if (has('className')) {
+    if (header.className) {
+      fields.push(renderFilledField('Turma', header.className));
+    } else if (header.fields.className) {
+      fields.push(renderBlankField('Turma'));
+    }
+  }
+  if (has('date') && header.fields.date) {
     fields.push(renderBlankField('Data'));
   }
-  if (header.fields.score) {
+  if (has('score') && header.fields.score && total > 0) {
     fields.push(
       `<div class="header-field"><span>Nota:</span><span class="header-blank"></span><span>/ ${formatNumber(total)}</span></div>`,
     );
@@ -100,72 +123,41 @@ export function renderHeader(
     '<header class="header">',
     brand.length > 0 ? `<div class="header-brand">${brand.join('')}</div>` : '',
     `<h1 class="header-title">${escapeHtml(title)}</h1>`,
-    `<div class="header-meta">${meta.join('')}</div>`,
+    meta.length > 0 ? `<div class="header-meta">${meta.join('')}</div>` : '',
     fields.length > 0 ? `<div class="header-fields">${fields.join('')}</div>` : '',
     '</header>',
   ].join('');
 }
 
-function renderQuestionHead(number: number, question: Question): string {
-  return [
-    '<div class="question-head">',
-    `<span class="question-number">${number}.</span>`,
-    `<div class="question-statement">${escapeHtml(question.statement)}</div>`,
-    `<span class="question-points">(${formatPoints(question.points)})</span>`,
-    '</div>',
-  ].join('');
+function renderBlock({ block, number }: NumberedBlock): string {
+  return definitionOf(block.kind).renderHtml(block, number);
 }
 
-export function renderMultipleChoice(
-  question: MultipleChoice,
-  number: number,
-): string {
-  const alternatives = question.alternatives
-    .map(
-      (alternative, index) =>
-        `<li class="alternative"><span class="alternative-label">${alternativeLabel(index)})</span><span class="alternative-text">${escapeHtml(alternative)}</span></li>`,
-    )
-    .join('');
-
-  return `<article class="question">${renderQuestionHead(number, question)}<ol class="alternatives">${alternatives}</ol></article>`;
-}
-
-export function renderOpenEnded(question: OpenEnded, number: number): string {
-  const lines = '<div class="answer-line"></div>'.repeat(question.lines);
-
-  return `<article class="question">${renderQuestionHead(number, question)}<div class="answer-lines">${lines}</div></article>`;
-}
-
-function renderQuestion({ question, number }: NumberedQuestion): string {
-  return question.kind === 'multiple_choice'
-    ? renderMultipleChoice(question, number)
-    : renderOpenEnded(question, number);
-}
-
-export function renderSection({ section, questions }: NumberedSection): string {
+export function renderSection({ section, blocks }: NumberedSection): string {
   return [
     '<section class="section">',
     `<h2 class="section-title">${escapeHtml(section.title)}</h2>`,
-    questions.map(renderQuestion).join(''),
+    blocks.map(renderBlock).join(''),
     '</section>',
   ].join('');
 }
 
 /**
- * Deterministic JSON → HTML for the student's test. Never includes answers:
+ * Deterministic JSON → HTML for the student's document. Never includes answers:
  * the answer key is a separate document (see render-answer-key.ts).
  */
-export function renderAssessmentHtml(
-  content: AssessmentContent,
-  header: AssessmentHeader,
-  theme: AssessmentTheme,
+export function renderDocumentHtml(
+  content: DocumentContent,
+  header: DocumentHeader,
+  theme: DocumentTheme,
+  layout: HeaderLayout,
 ): string {
   const body = [
-    renderHeader(header, content.title, totalPoints(content)),
+    renderHeader(header, content.title, totalPoints(content), layout),
     content.instructions
       ? `<p class="instructions">${escapeHtml(content.instructions)}</p>`
       : '',
-    numberQuestions(content, theme.numbering).map(renderSection).join(''),
+    numberBlocks(content, theme.numbering).map(renderSection).join(''),
   ].join('');
 
   return renderPage(content.title, body, theme);

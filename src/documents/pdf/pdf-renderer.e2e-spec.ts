@@ -5,19 +5,21 @@ import {
   allAssessmentFixtures,
   shortAssessment,
 } from '../__fixtures__/assessments.js';
+import { isScoredBlock } from '../blocks/registry.js';
 import { assignIds } from '../build/assign-ids.js';
-import {
-  aiAssessmentSchema,
-  type AiAssessmentInput,
-} from '../schemas/content.schema.js';
+import type { AiContentInput } from '../schemas/content.schema.js';
 import { headerSchema } from '../schemas/header.schema.js';
 import {
   themeSchema,
-  type AssessmentThemeInput,
+  type DocumentThemeInput,
 } from '../schemas/theme.schema.js';
 import { renderAnswerKey } from '../render/render-answer-key.js';
-import { renderAssessmentHtml } from '../render/render-html.js';
+import { renderDocumentHtml } from '../render/render-html.js';
+import { getDocumentType } from '../types/registry.js';
 import { PdfRendererService } from './pdf-renderer.service.js';
+
+const assessmentType = getDocumentType('assessment');
+const { aiContent: aiAssessmentSchema } = assessmentType.schemas.content;
 
 // Real Chromium, no mocks. Every PDF (and its HTML) is also written to
 // .tmp/assessment-pdf so page breaks and layout can be checked by eye.
@@ -29,12 +31,12 @@ const header = headerSchema.parse({
   subject: 'Ciências',
 });
 
-const longAssessment: AiAssessmentInput = {
+const longAssessment: AiContentInput = {
   title: 'Avaliação longa',
   instructions: 'Responda todas as questões.',
   sections: ['Parte A', 'Parte B', 'Parte C'].map((title) => ({
     title,
-    questions: Array.from({ length: 10 }, (_unused, index) =>
+    blocks: Array.from({ length: 10 }, (_unused, index) =>
       index % 2 === 0
         ? {
             kind: 'multiple_choice' as const,
@@ -70,14 +72,14 @@ async function readPdf(pdf: Buffer): Promise<{ text: string; pages: number }> {
 describe('PdfRendererService (real Chromium)', () => {
   let service: PdfRendererService;
 
-  const build = (fixture: AiAssessmentInput, theme: AssessmentThemeInput = {}) => {
+  const build = (fixture: AiContentInput, theme: DocumentThemeInput = {}) => {
     const content = assignIds(aiAssessmentSchema.parse(fixture));
     const parsedTheme = themeSchema.parse(theme);
 
     return {
       content,
       theme: parsedTheme,
-      html: renderAssessmentHtml(content, header, parsedTheme),
+      html: renderDocumentHtml(content, header, parsedTheme, assessmentType),
     };
   };
 
@@ -106,7 +108,7 @@ describe('PdfRendererService (real Chromium)', () => {
 
       expect(pages).toBe(1);
       expect(text).toContain(normalize(content.title));
-      for (const question of content.sections.flatMap((s) => s.questions)) {
+      for (const question of content.sections.flatMap((s) => s.blocks).filter(isScoredBlock)) {
         expect(text).toContain(normalize(question.statement));
         if (question.kind === 'open_ended' && question.expectedAnswer) {
           expect(text).not.toContain(normalize(question.expectedAnswer));
@@ -122,7 +124,7 @@ describe('PdfRendererService (real Chromium)', () => {
     const { text, pages } = await renderAndSave('long', html);
 
     expect(pages).toBeGreaterThan(1);
-    for (const question of content.sections.flatMap((s) => s.questions)) {
+    for (const question of content.sections.flatMap((s) => s.blocks).filter(isScoredBlock)) {
       expect(text).toContain(normalize(question.statement));
     }
   }, 60_000);

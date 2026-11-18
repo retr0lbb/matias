@@ -1,18 +1,16 @@
 import {
-  assignQuestionId,
+  assignBlockId,
   assignSectionIds,
   type IdGenerator,
 } from '../build/assign-ids.js';
 import type {
-  AssessmentContent,
-  Question,
+  DocumentContent,
+  Block,
   Section,
 } from '../schemas/content.schema.js';
-import {
-  assessmentDocumentSchema,
-  type AssessmentDocument,
-} from '../schemas/document.schema.js';
+import type { StoredDocument } from '../schemas/document.schema.js';
 import type { PatchOp } from '../schemas/patch.schema.js';
+import type { DocumentTypeDefinition } from '../types/document-type.js';
 
 export interface PatchIssue {
   /** Index of the failing operation; null when the resulting document is invalid. */
@@ -21,12 +19,12 @@ export interface PatchIssue {
 }
 
 export type ApplyPatchResult =
-  | { success: true; document: AssessmentDocument }
+  | { success: true; document: StoredDocument }
   | { success: false; errors: PatchIssue[] };
 
 class PatchOpError extends Error {}
 
-function findSection(content: AssessmentContent, sectionId: string): Section {
+function findSection(content: DocumentContent, sectionId: string): Section {
   const section = content.sections.find(({ id }) => id === sectionId);
   if (!section) {
     throw new PatchOpError(`Section "${sectionId}" does not exist`);
@@ -34,17 +32,17 @@ function findSection(content: AssessmentContent, sectionId: string): Section {
   return section;
 }
 
-function findQuestion(
-  content: AssessmentContent,
-  questionId: string,
+function findBlock(
+  content: DocumentContent,
+  blockId: string,
 ): { section: Section; index: number } {
   for (const section of content.sections) {
-    const index = section.questions.findIndex(({ id }) => id === questionId);
+    const index = section.blocks.findIndex(({ id }) => id === blockId);
     if (index !== -1) {
       return { section, index };
     }
   }
-  throw new PatchOpError(`Question "${questionId}" does not exist`);
+  throw new PatchOpError(`Block "${blockId}" does not exist`);
 }
 
 /** Inserts after the item with `afterId`, or at the start when it is null. */
@@ -67,7 +65,7 @@ function insertAfter<T extends { id: string }>(
 }
 
 function applyOp(
-  document: AssessmentDocument,
+  document: StoredDocument,
   op: PatchOp,
   newId: IdGenerator | undefined,
 ): void {
@@ -95,7 +93,7 @@ function applyOp(
         content.sections,
         op.afterSectionId,
         assignSectionIds(op.section, newId),
-        'the assessment',
+        'the document',
       );
       return;
 
@@ -107,42 +105,42 @@ function applyOp(
       return;
     }
 
-    case 'replace_question': {
-      const { section, index } = findQuestion(content, op.questionId);
-      const replacement: Question = { ...op.question, id: op.questionId };
-      section.questions[index] = replacement;
+    case 'replace_block': {
+      const { section, index } = findBlock(content, op.blockId);
+      const replacement: Block = { ...op.block, id: op.blockId };
+      section.blocks[index] = replacement;
       return;
     }
 
-    case 'insert_question': {
+    case 'insert_block': {
       const section = findSection(content, op.sectionId);
       insertAfter(
-        section.questions,
-        op.afterQuestionId,
-        assignQuestionId(op.question, newId),
+        section.blocks,
+        op.afterBlockId,
+        assignBlockId(op.block, newId),
         `section "${op.sectionId}"`,
       );
       return;
     }
 
-    case 'remove_question': {
-      const { section, index } = findQuestion(content, op.questionId);
-      section.questions.splice(index, 1);
+    case 'remove_block': {
+      const { section, index } = findBlock(content, op.blockId);
+      section.blocks.splice(index, 1);
       return;
     }
 
-    case 'move_question': {
-      if (op.afterQuestionId === op.questionId) {
-        throw new PatchOpError('A question cannot be placed after itself');
+    case 'move_block': {
+      if (op.afterBlockId === op.blockId) {
+        throw new PatchOpError('A block cannot be placed after itself');
       }
 
-      const source = findQuestion(content, op.questionId);
+      const source = findBlock(content, op.blockId);
       const target = findSection(content, op.toSectionId);
-      const [question] = source.section.questions.splice(source.index, 1);
+      const [block] = source.section.blocks.splice(source.index, 1);
       insertAfter(
-        target.questions,
-        op.afterQuestionId,
-        question,
+        target.blocks,
+        op.afterBlockId,
+        block,
         `section "${op.toSectionId}"`,
       );
       return;
@@ -184,8 +182,9 @@ function applyOp(
  * and the input is left untouched. Pure.
  */
 export function applyPatch(
-  document: AssessmentDocument,
+  document: StoredDocument,
   ops: readonly PatchOp[],
+  type: Pick<DocumentTypeDefinition, 'schemas'>,
   newId?: IdGenerator,
 ): ApplyPatchResult {
   const draft = structuredClone(document);
@@ -201,8 +200,9 @@ export function applyPatch(
     }
   }
 
-  // Catches what no single operation can see, like a section left empty.
-  const result = assessmentDocumentSchema.safeParse(draft);
+  // Catches what no single operation can see, like a section left empty or a
+  // block kind the document's type does not allow.
+  const result = type.schemas.document.safeParse(draft);
   if (!result.success) {
     return {
       success: false,

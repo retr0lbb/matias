@@ -30,18 +30,20 @@ Rule: generating a document spends 1 credit and includes 7 AI changes. The 8th c
 
 ## Credit ledger (replaces counting from `assessments`)
 
-New table `document_credits` (`id`, `user_id`, `assessment_id` nullable / set null on delete,
+New table `document_credits` (`id`, `user_id`, `document_id` nullable / set null on delete,
 `reason` = `GENERATE | EXTRA_CHANGES`, `created_at`). A row is written, under the per-user lock and in
-the same transaction as the assessment write, every time a credit is spent. Usage = rows in the current
-cycle. This fixes the old loophole: changes to assessments created in earlier cycles were never charged.
+the same transaction as the document write, every time a credit is spent. Usage = rows in the current
+cycle. This fixes the old loophole: changes to documents created in earlier cycles were never charged.
+(The column was `assessment_id` and the table `assessments` until migration
+`20261118182314_document_types`; see `document-blocks.md`.) Every document type spends credits the same way.
 
 `UsageService`: `getDocumentAllowance`, `assertCanSpendDocumentCredit`, `extraCreditNeeded`,
-`recordDocumentCredit`. `GET /usage` gains `documents: { used, limit, aiChangesPerDocument }`.
+`recordDocumentCredit`. `GET /usage` gains `documentGeneration: { used, limit, aiChangesPerDocument }`.
 Quota code: `DOCUMENTS_PER_CYCLE`.
 
 ## Thinking level
 
-`POST /documents/assessments`, `/revise`, `/regenerate` accept `thinkingLevel` (`DEFAULT | HIGH | ULTRA_HIGH`,
+`POST /documents`, `/documents/:id/revise`, `/documents/:id/regenerate` accept `thinkingLevel` (`DEFAULT | HIGH | ULTRA_HIGH`,
 default `DEFAULT` = Gemini LOW, same as before). Above the plan max → 403 `THINKING_LEVEL_NOT_ALLOWED`
 (same rule as chat).
 

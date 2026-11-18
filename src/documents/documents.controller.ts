@@ -15,10 +15,11 @@ import { z } from "zod/v4";
 import type { User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
 import { THINKING_LEVELS } from "../usage/plan-limits.js";
-import { AssessmentsService, type AssessmentView, type RenderedPdf } from "./documents.service.js";
+import { DocumentsService, type DocumentView, type RenderedPdf } from "./documents.service.js";
 import { headerSchema } from "./schemas/header.schema.js";
 import { patchSchema } from "./schemas/patch.schema.js";
 import { themeSchema } from "./schemas/theme.schema.js";
+import { DOCUMENT_TYPES } from "./types/document-type.js";
 
 const MAX_PROMPT_LENGTH = 4000;
 const MAX_INSTRUCTION_LENGTH = 2000;
@@ -30,6 +31,8 @@ const version = z.number().int().min(1);
 const thinkingLevel = z.enum(THINKING_LEVELS).default("DEFAULT");
 
 const generateBodySchema = z.object({
+	// Decides the blocks, the header, the answer key and the prompts.
+	type: z.enum(DOCUMENT_TYPES).default("assessment"),
 	prompt,
 	conversationId: z.uuid().optional(),
 	// Set by the teacher, never by the AI. Both fall back to the defaults.
@@ -50,7 +53,13 @@ const reviseBodySchema = z.object({
 });
 type ReviseBody = z.infer<typeof reviseBodySchema>;
 
-const regenerateBodySchema = z.object({ version, prompt: prompt.optional(), thinkingLevel });
+const regenerateBodySchema = z.object({
+	version,
+	prompt: prompt.optional(),
+	thinkingLevel,
+	// Off: the conversation as it was when the document was created. On: as it is now.
+	refreshContext: z.boolean().default(false),
+});
 type RegenerateBody = z.infer<typeof regenerateBodySchema>;
 
 // The preview is shown inside a sandboxed iframe; this keeps it inert even if
@@ -66,21 +75,21 @@ function toPdfFile({ filename, pdf }: RenderedPdf): StreamableFile {
 }
 
 @Authenticate({ verifiedEmail: true })
-@Controller("documents/assessments")
-export class AssessmentsController {
-	constructor(private readonly assessmentsService: AssessmentsService) {}
+@Controller("documents")
+export class DocumentsController {
+	constructor(private readonly documentsService: DocumentsService) {}
 
 	@Post()
 	generate(
 		@Body(new ZodValidationPipe(generateBodySchema)) body: GenerateBody,
 		@CurrentUser() user: User,
-	): Promise<AssessmentView> {
-		return this.assessmentsService.generate(user, body);
+	): Promise<DocumentView> {
+		return this.documentsService.generate(user, body);
 	}
 
 	@Get(":id")
-	get(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: User): Promise<AssessmentView> {
-		return this.assessmentsService.get(id, user.id);
+	get(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: User): Promise<DocumentView> {
+		return this.documentsService.get(id, user.id);
 	}
 
 	@Patch(":id")
@@ -88,8 +97,8 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@Body(new ZodValidationPipe(patchBodySchema)) body: PatchBody,
 		@CurrentUser() user: User,
-	): Promise<AssessmentView> {
-		return this.assessmentsService.patch(id, user.id, body);
+	): Promise<DocumentView> {
+		return this.documentsService.patch(id, user.id, body);
 	}
 
 	@Post(":id/revise")
@@ -98,8 +107,8 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@Body(new ZodValidationPipe(reviseBodySchema)) body: ReviseBody,
 		@CurrentUser() user: User,
-	): Promise<AssessmentView> {
-		return this.assessmentsService.revise(id, user, body);
+	): Promise<DocumentView> {
+		return this.documentsService.revise(id, user, body);
 	}
 
 	@Post(":id/regenerate")
@@ -108,8 +117,8 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@Body(new ZodValidationPipe(regenerateBodySchema)) body: RegenerateBody,
 		@CurrentUser() user: User,
-	): Promise<AssessmentView> {
-		return this.assessmentsService.regenerate(id, user, body);
+	): Promise<DocumentView> {
+		return this.documentsService.regenerate(id, user, body);
 	}
 
 	@Get(":id/preview")
@@ -117,7 +126,7 @@ export class AssessmentsController {
 	@Header("Content-Security-Policy", PREVIEW_CSP)
 	@Header("Cache-Control", "no-store")
 	preview(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: User): Promise<string> {
-		return this.assessmentsService.renderPreview(id, user.id);
+		return this.documentsService.renderPreview(id, user.id);
 	}
 
 	@Get(":id/pdf")
@@ -125,7 +134,7 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@CurrentUser() user: User,
 	): Promise<StreamableFile> {
-		return toPdfFile(await this.assessmentsService.renderPdf(id, user.id));
+		return toPdfFile(await this.documentsService.renderPdf(id, user.id));
 	}
 
 	@Get(":id/answer-key")
@@ -133,7 +142,7 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@CurrentUser() user: User,
 	): Promise<StreamableFile> {
-		return toPdfFile(await this.assessmentsService.renderAnswerKeyPdf(id, user.id));
+		return toPdfFile(await this.documentsService.renderAnswerKeyPdf(id, user.id));
 	}
 
 	@Get(":id/answer-key/preview")
@@ -144,6 +153,6 @@ export class AssessmentsController {
 		@Param("id", ParseUUIDPipe) id: string,
 		@CurrentUser() user: User,
 	): Promise<string> {
-		return this.assessmentsService.renderAnswerKeyPreview(id, user.id);
+		return this.documentsService.renderAnswerKeyPreview(id, user.id);
 	}
 }

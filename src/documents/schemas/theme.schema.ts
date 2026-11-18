@@ -37,5 +37,5 @@ export const themeSchema = z.object({
   numbering: z.enum(NUMBERING_MODES).default('per_section'),
 });
 
-export type AssessmentTheme = z.infer<typeof themeSchema>;
-export type AssessmentThemeInput = z.input<typeof themeSchema>;
+export type DocumentTheme = z.infer<typeof themeSchema>;
+export type DocumentThemeInput = z.input<typeof themeSchema>;

@@ -1,5 +1,10 @@
 # Plano: geração de documentos por template (módulo de avaliações)
 
+> **Histórico.** Este foi o primeiro plano do módulo. O plano em vigor é `specs/document-blocks.md`
+> (blocos, cinco tipos de documento, rotas `/documents`, tabela `documents`); cotas em
+> `specs/document-credits.md`. Nomes como `questions`, `assessments` e `/documents/assessments` abaixo
+> não existem mais.
+
 ## Contexto
 
 O professor pede uma avaliação, a IA devolve JSON validado por Zod, o servidor deriva HTML (preview), PDF e DOCX desse JSON, e ajustes posteriores chegam como patches de JSON. O JSON é a única fonte da verdade. Hoje o repositório tem só o schema inicial e uma rota de debug; todo o resto é novo. Nada será implementado antes da sua aprovação.

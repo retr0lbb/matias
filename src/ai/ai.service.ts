@@ -1,17 +1,12 @@
-import {
-	BadRequestException,
-	ForbiddenException,
-	Injectable,
-	Logger,
-	UnauthorizedException,
-} from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
 import { type MessageMetadata, messagesTable } from "../db/schemas/message.js";
 import { userTable } from "../db/schemas/user.js";
-import { RagSearchResult, RagService } from "../rag/rag.service.js";
+import { ConversationContextService } from "../conversation/conversation-context.service.js";
+import type { RagSearchResult } from "../rag/rag.service.js";
 import {
 	type QuotaExceededBody,
 	QuotaExceededException,
@@ -25,7 +20,6 @@ import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js
 import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
 
 const HISTORY_LIMIT = 20;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type History = { role: "USER" | "IA"; content: string | null }[];
 
@@ -56,7 +50,7 @@ export class AiService {
 	constructor(
 		private readonly aiFactory: AiExpensesFactory,
 		@InjectDrizzle() private readonly db: NodePgDatabase,
-		private readonly ragService: RagService,
+		private readonly conversations: ConversationContextService,
 		private readonly usageService: UsageService,
 		private readonly judgeModel: JudgeModel,
 	) {}
@@ -75,65 +69,8 @@ export class AiService {
 
 		const allowance = await this.loadAllowance(user, options);
 
-		let conversation: {
-			title: string | null;
-			id: string;
-			userId: string;
-			createdAt: Date;
-			updatedAt: Date | null;
-		};
-
-		if (conversationId) {
-			if (!UUID_PATTERN.test(conversationId)) {
-				throw new BadRequestException("conversationId must be a UUID");
-			}
-
-			const [foundConversation] = await this.db
-				.select()
-				.from(conversationsTable)
-				.where(eq(conversationsTable.id, conversationId));
-
-			if (foundConversation && foundConversation.userId !== loggedUser) {
-				throw new ForbiddenException("Not your chat pal");
-			}
-
-			if (foundConversation) {
-				conversation = foundConversation;
-			} else {
-				// Clients can pre-generate the conversation id so documents uploaded
-				// with that id are found when the chat starts.
-				const [newConversation] = await this.db
-					.insert(conversationsTable)
-					.values({
-						id: conversationId,
-						userId: loggedUser,
-					})
-					.returning();
-
-				conversation = newConversation;
-			}
-		} else {
-			const [newConversation] = await this.db
-				.insert(conversationsTable)
-				.values({
-					userId: loggedUser,
-				})
-				.returning();
-
-			conversation = newConversation;
-		}
-
-		const history = (
-			await this.db
-				.select({
-					role: messagesTable.role,
-					content: messagesTable.content,
-				})
-				.from(messagesTable)
-				.where(eq(messagesTable.conversationId, conversation.id))
-				.orderBy(desc(messagesTable.createdAt))
-				.limit(HISTORY_LIMIT)
-		).reverse();
+		const conversation = await this.conversations.getOrCreate(loggedUser, conversationId);
+		const history = await this.conversations.loadHistory(conversation.id, { limit: HISTORY_LIMIT });
 
 		const turn = await this.planTurn(prompt, history, options, allowance);
 		const judgeResponse = turn.judge;
@@ -149,7 +86,11 @@ export class AiService {
 
 		const chunks: RagSearchResult[] =
 			judgeResponse.retrieve && conversationId
-				? await this.retrieveContext(prompt, loggedUser, conversation.id)
+				? await this.conversations.retrieve({
+						query: prompt,
+						userId: loggedUser,
+						conversationId: conversation.id,
+					})
 				: [];
 
 		const input = buildRagPrompt(prompt, chunks, history);
@@ -204,47 +145,7 @@ export class AiService {
 		// Before any SSE header: a MANUAL pick over quota is a real HTTP 429.
 		const allowance = await this.loadAllowance(user, options);
 
-		let conversation: { id: string; userId: string; title: string | null };
-
-		if (conversationId) {
-			if (!UUID_PATTERN.test(conversationId)) {
-				throw new BadRequestException("conversationId must be a UUID");
-			}
-
-			const [foundConversation] = await this.db
-				.select()
-				.from(conversationsTable)
-				.where(eq(conversationsTable.id, conversationId));
-
-			if (foundConversation && foundConversation.userId !== loggedUser) {
-				throw new ForbiddenException("Not your chat pal");
-			}
-
-			if (foundConversation) {
-				conversation = foundConversation;
-			} else {
-				// Clients can pre-generate the conversation id so documents uploaded
-				// with that id are found when the chat starts.
-				const [newConversation] = await this.db
-					.insert(conversationsTable)
-					.values({
-						id: conversationId,
-						userId: loggedUser,
-					})
-					.returning();
-
-				conversation = newConversation;
-			}
-		} else {
-			const [newConversation] = await this.db
-				.insert(conversationsTable)
-				.values({
-					userId: loggedUser,
-				})
-				.returning();
-
-			conversation = newConversation;
-		}
+		const conversation = await this.conversations.getOrCreate(loggedUser, conversationId);
 
 		return {
 			user,
@@ -279,17 +180,9 @@ export class AiService {
 		try {
 			yield { type: "status", data: { stage: "classifying" } };
 
-			const history = (
-				await this.db
-					.select({
-						role: messagesTable.role,
-						content: messagesTable.content,
-					})
-					.from(messagesTable)
-					.where(eq(messagesTable.conversationId, ctx.conversation.id))
-					.orderBy(desc(messagesTable.createdAt))
-					.limit(HISTORY_LIMIT)
-			).reverse();
+			const history = await this.conversations.loadHistory(ctx.conversation.id, {
+				limit: HISTORY_LIMIT,
+			});
 
 			turn = await this.planTurn(ctx.prompt, history, ctx.options, ctx.allowance);
 			const judgeResponse = turn.judge;
@@ -306,7 +199,11 @@ export class AiService {
 			let chunks: RagSearchResult[] = [];
 			if (judgeResponse.retrieve && ctx.ragEnabled) {
 				yield { type: "status", data: { stage: "retrieving" } };
-				chunks = await this.retrieveContext(ctx.prompt, ctx.user.id, ctx.conversation.id);
+				chunks = await this.conversations.retrieve({
+					query: ctx.prompt,
+					userId: ctx.user.id,
+					conversationId: ctx.conversation.id,
+				});
 			}
 
 			const input = buildRagPrompt(ctx.prompt, chunks, history);
@@ -503,21 +400,6 @@ export class AiService {
 			tokens: final.tokens,
 			thinking,
 		};
-	}
-
-	private async retrieveContext(prompt: string, userId: string, conversationId: string) {
-		try {
-			const ready = await this.ragService.hasReadyDocuments(userId, conversationId);
-			this.logger.log(`[RAG] conversation=${conversationId} ready=${ready}`);
-			if (!ready) return [];
-
-			const results = await this.ragService.search(prompt, userId, { conversationId });
-			this.logger.log(`[RAG] results=${results.length}`);
-			return results;
-		} catch (error) {
-			this.logger.error("[RAG] search failed", error);
-			return [];
-		}
 	}
 }
 

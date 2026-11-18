@@ -1,27 +1,26 @@
-import type {
-  AssessmentContent,
-  Question,
-  Section,
-} from '../schemas/content.schema.js';
-import type { AssessmentTheme } from '../schemas/theme.schema.js';
+import { definitionOf, isScoredBlock } from '../blocks/registry.js';
+import type { DocumentContent, Block, Section } from '../schemas/content.schema.js';
+import type { DocumentTheme } from '../schemas/theme.schema.js';
 
-// Everything derived from the content (numbers, letters, totals) is computed
-// here and shared by the HTML, DOCX and answer-key renderers, so the outputs
-// cannot disagree. None of it is stored in the document.
+// Everything derived from the content (numbers, totals) is computed here and
+// shared by the HTML, DOCX and answer-key renderers, so the outputs cannot
+// disagree. None of it is stored in the document. Formatting helpers (letters,
+// pt-BR numbers) live in format.ts.
 
-export interface NumberedQuestion {
-  number: number;
-  question: Question;
+export interface NumberedBlock {
+  /** Set for scored blocks (questions); null for content blocks. */
+  number: number | null;
+  block: Block;
 }
 
 export interface NumberedSection {
   section: Section;
-  questions: NumberedQuestion[];
+  blocks: NumberedBlock[];
 }
 
-export function numberQuestions(
-  content: AssessmentContent,
-  numbering: AssessmentTheme['numbering'],
+export function numberBlocks(
+  content: DocumentContent,
+  numbering: DocumentTheme['numbering'],
 ): NumberedSection[] {
   let counter = 0;
 
@@ -32,33 +31,20 @@ export function numberQuestions(
 
     return {
       section,
-      questions: section.questions.map((question) => ({
-        number: ++counter,
-        question,
+      blocks: section.blocks.map((block) => ({
+        number: isScoredBlock(block) ? ++counter : null,
+        block,
       })),
     };
   });
 }
 
-/** 0 → "a", 1 → "b"... */
-export function alternativeLabel(index: number): string {
-  return String.fromCharCode('a'.charCodeAt(0) + index);
-}
-
-export function totalPoints(content: AssessmentContent): number {
+/** The document's value: the points every block contributes (questions, a rubric's criteria). */
+export function totalPoints(content: DocumentContent): number {
   const sum = content.sections
-    .flatMap((section) => section.questions)
-    .reduce((total, question) => total + question.points, 0);
+    .flatMap((section) => section.blocks)
+    .reduce((total, block) => total + (definitionOf(block.kind).pointsOf?.(block) ?? 0), 0);
 
   // Avoids float noise such as 0.1 + 0.2 = 0.30000000000000004.
   return Math.round(sum * 1000) / 1000;
-}
-
-export function formatNumber(value: number): string {
-  return value.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
-}
-
-/** "0,5 ponto", "1 ponto", "2 pontos". */
-export function formatPoints(points: number): string {
-  return `${formatNumber(points)} ${points < 2 ? 'ponto' : 'pontos'}`;
 }

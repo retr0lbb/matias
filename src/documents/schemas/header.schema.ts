@@ -9,6 +9,12 @@ const LOGO_PATTERN = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
 
 const text = z.string().min(1).max(200);
 
+/** The blank fields a student can be asked to fill in. A document type picks which ones exist. */
+export const STUDENT_FIELDS = ['studentName', 'groupMembers', 'date', 'className', 'score'] as const;
+export type StudentField = (typeof STUDENT_FIELDS)[number];
+
+export const MAX_EXTRA_FIELDS = 6;
+
 export const DEFAULT_HEADER_FIELDS = {
   studentName: true,
   date: true,
@@ -22,6 +28,15 @@ export const headerFieldsSchema = z.object({
   date: z.boolean().default(DEFAULT_HEADER_FIELDS.date),
   className: z.boolean().default(DEFAULT_HEADER_FIELDS.className),
   score: z.boolean().default(DEFAULT_HEADER_FIELDS.score),
+  // Blank lines for the names of a group. Optional with no default (shown unless false), so
+  // documents saved before it existed parse unchanged; only types that list it print it.
+  groupMembers: z.boolean().optional(),
+});
+
+// A labelled value for what the fixed fields don't cover, e.g. "Carga horária: 60 h".
+const extraFieldSchema = z.object({
+  label: z.string().min(1).max(40),
+  value: z.string().min(1).max(100),
 });
 
 /** Never produced by the AI: comes from the institution/teacher records. */
@@ -31,8 +46,10 @@ export const headerSchema = z.object({
   teacherName: text.optional(),
   subject: text.optional(),
   className: text.optional(),
+  // Optional with no default, so documents saved before it existed parse unchanged.
+  extra: z.array(extraFieldSchema).max(MAX_EXTRA_FIELDS).optional(),
   fields: headerFieldsSchema.default(DEFAULT_HEADER_FIELDS),
 });
 
-export type AssessmentHeader = z.infer<typeof headerSchema>;
-export type AssessmentHeaderInput = z.input<typeof headerSchema>;
+export type DocumentHeader = z.infer<typeof headerSchema>;
+export type DocumentHeaderInput = z.input<typeof headerSchema>;

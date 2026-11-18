@@ -364,7 +364,7 @@ export class UsageService {
   /** Writes the ledger row for a spent credit; call inside the same transaction as the change. */
   async recordDocumentCredit(
     executor: DbExecutor,
-    entry: { userId: string; assessmentId: string; reason: DocumentCreditReason },
+    entry: { userId: string; documentId: string; reason: DocumentCreditReason },
   ): Promise<void> {
     await executor.insert(documentCreditsTable).values(entry);
   }

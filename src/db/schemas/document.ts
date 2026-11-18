@@ -1,9 +1,14 @@
 import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import type { AssessmentDocument } from "../../documents/schemas/document.schema.js";
+import type { StoredDocument } from "../../documents/schemas/document.schema.js";
+import { DOCUMENT_TYPES } from "../../documents/types/document-type.js";
 import { userTable } from "./user.js";
 
-export const assessmentsTable = pgTable(
-	"assessments",
+export const documentTypeEnum = pgEnum("document_type", DOCUMENT_TYPES);
+
+export type DocumentTypeName = (typeof documentTypeEnum.enumValues)[number];
+
+export const documentsTable = pgTable(
+	"documents",
 	{
 		id: uuid().primaryKey().defaultRandom(),
 		userId: uuid("user_id")
@@ -11,8 +16,10 @@ export const assessmentsTable = pgTable(
 			.notNull(),
 		// No FK, same as rag_documents: clients may pre-generate conversation ids.
 		conversationId: uuid("conversation_id"),
+		// Decides the block kinds, the header, the answer key and the prompts.
+		type: documentTypeEnum().notNull().default("assessment"),
 		// Single source of truth; HTML, PDF and DOCX are derived from it on demand.
-		document: jsonb().$type<AssessmentDocument>().notNull(),
+		document: jsonb().$type<StoredDocument>().notNull(),
 		// Bumped on every change, for optimistic concurrency.
 		version: integer().notNull().default(1),
 		// The request the content was last generated from; reused by regenerate.
@@ -25,11 +32,11 @@ export const assessmentsTable = pgTable(
 			.defaultNow()
 			.notNull(),
 	},
-	(tb) => [index("assessments_user_created_at_index").on(tb.userId, tb.createdAt)],
+	(tb) => [index("documents_user_created_at_index").on(tb.userId, tb.createdAt)],
 );
 
-export type Assessment = typeof assessmentsTable.$inferSelect;
-export type NewAssessment = typeof assessmentsTable.$inferInsert;
+export type DocumentRow = typeof documentsTable.$inferSelect;
+export type NewDocumentRow = typeof documentsTable.$inferInsert;
 
 export const documentCreditReasonEnum = pgEnum("document_credit_reason", [
 	"GENERATE",
@@ -47,8 +54,8 @@ export const documentCreditsTable = pgTable(
 		userId: uuid("user_id")
 			.references(() => userTable.id, { onDelete: "cascade" })
 			.notNull(),
-		// Kept when the assessment is deleted: the credit was still spent.
-		assessmentId: uuid("assessment_id").references(() => assessmentsTable.id, {
+		// Kept when the document is deleted: the credit was still spent.
+		documentId: uuid("document_id").references(() => documentsTable.id, {
 			onDelete: "set null",
 		}),
 		reason: documentCreditReasonEnum().notNull(),
