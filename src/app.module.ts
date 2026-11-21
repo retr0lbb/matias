@@ -4,6 +4,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { DrizzleModule } from "@nestjs/drizzle";
 import { FileTemplateEngine, LogMailTransport, MailModule, ResendTransport } from "@nestjs/mail";
+import { ScheduleModule } from "@nestjs/schedule";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { AiModule } from "./ai/ai.module.js";
 import { AuthModule } from "./auth/auth.module.js";
@@ -11,6 +12,7 @@ import { DocumentsModule } from "./documents/documents.module.js";
 import { PaymentModule } from "./payment/payment.module.js";
 import { RagModule } from "./rag/rag.module.js";
 import { RouterModule } from "./router/router.module.js";
+import { BeliargeModule } from "./shared/crons/mr_beliarge/beliarge.module.js";
 import { SharedModule } from "./shared/shared.module.js";
 import { SubscriptionModule } from "./subscription/subscription.module.js";
 import { UsageModule } from "./usage/usage.module.js";
@@ -20,6 +22,7 @@ import { UsageModule } from "./usage/usage.module.js";
 		ConfigModule.forRoot({
 			isGlobal: true,
 		}),
+		ScheduleModule.forRoot(),
 		MailModule.forRootAsync({
 			useFactory: () => ({
 				transport: process.env.RESEND_API_KEY
@@ -62,6 +65,7 @@ import { UsageModule } from "./usage/usage.module.js";
 		UsageModule,
 		SubscriptionModule,
 		PaymentModule,
+		BeliargeModule,
 	],
 })
 export class AppModule {}
