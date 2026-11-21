@@ -1,11 +1,11 @@
 
 @baseUrl = http://localhost:3000
 
-@email = sistemas@saude.matita.com.br
+@email = retr0lbb@gmail.com
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=9yF-I9yLJHj0iMYsw-bqo56nPXZJQN-GCoy8MEyDM0Y
+@cookie = __Host-sid=utMUO83QqbwPomBEUA0wHsR3ABGZ-FdGydvI_8ijyC8
 
 ### CHAT
 POST {{baseUrl}}/ai/chat
@@ -55,12 +55,12 @@ POST http://localhost:3000/auth/email/verify
 Content-Type: application/json
 
 {
-    "token": "EK4CNGppoX3W3uhiGNeAcvqANALEPCIudi8U8WFJKcs"
+    "token": "rcJGD_ExVpe-CGjx6SAvUxSjnxeypqEcTLvy35wPsTI"
 }
 
 ### RESEND LINK
 POST {{baseUrl}}/auth/email/verification
-Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
+Cookie: {{cookie}}
 
 ###
 GET http://localhost:3000/me

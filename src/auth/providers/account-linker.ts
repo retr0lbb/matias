@@ -1,52 +1,50 @@
-import { AuthenticationRegistry, OAuthTokens, OidcAccountResolver, OidcProfile, OidcResolveContext } from "@nestjs/authentication";
-import { AuthService } from "../auth.service.js";
+import {
+	AuthenticationRegistry,
+	OAuthTokens,
+	OidcAccountResolver,
+	OidcProfile,
+	OidcResolveContext,
+} from "@nestjs/authentication";
 import { ConflictException, ForbiddenException, Injectable } from "@nestjs/common";
+import { AuthService } from "../auth.service.js";
 
 @Injectable()
-export class AccountLinker extends OidcAccountResolver{
-    constructor(
-        private readonly userService: AuthService,
-        registry: AuthenticationRegistry
-    ){
-        super()
-        registry.registerHandler("oidc", this)
-    }
+export class AccountLinker extends OidcAccountResolver {
+	constructor(
+		private readonly userService: AuthService,
+		registry: AuthenticationRegistry,
+	) {
+		super();
+		registry.registerHandler("oidc", this);
+	}
 
-    async resolveUser(profile: OidcProfile, _tokens: OAuthTokens, _context: OidcResolveContext){
-        if(!profile.email || !profile.emailVerified){
-            throw new ForbiddenException(
-                "A Google account with a verified email is required"
-            );
-        }
+	async resolveUser(profile: OidcProfile, _tokens: OAuthTokens, _context: OidcResolveContext) {
+		if (!profile.email || !profile.emailVerified) {
+			throw new ForbiddenException("A Google account with a verified email is required");
+		}
 
-        const exists = await this.userService.findByGoogleSubject(
-            profile.subject
-        )
+		const exists = await this.userService.findByGoogleSubject(profile.subject);
 
-        if(exists){
-            if (exists.loginProvider !== "GOOGLE") {
-                throw new ConflictException("Invalid login provider");
-            }
+		if (exists) {
+			if (exists.loginProvider !== "GOOGLE") {
+				throw new ConflictException("Invalid login provider");
+			}
 
-            return exists
-        }
+			return exists;
+		}
 
-        const existingEmail = await this.userService.findByEmail(
-            profile.email,
-        );
+		const existingEmail = await this.userService.findByEmail(profile.email);
 
-        // Any other account with this email: a LOCAL one, or a GOOGLE one tied to
-        // a different Google subject. Inserting would hit the unique email (500).
-        if(existingEmail){
-            throw new ConflictException(
-                "An account already exists. Sign in using your original method.",
-            );
-        }
+		// Any other account with this email: a LOCAL one, or a GOOGLE one tied to
+		// a different Google subject. Inserting would hit the unique email (500).
+		if (existingEmail) {
+			throw new ConflictException("An account already exists. Sign in using your original method.");
+		}
 
-        return this.userService.createGoogleUser({
-            name: profile.name || profile.email,
-            email: profile.email,
-            subject: profile.subject
-        })
-    }
+		return this.userService.createGoogleUser({
+			name: profile.name || profile.email,
+			email: profile.email,
+			subject: profile.subject,
+		});
+	}
 }

@@ -70,3 +70,6 @@ _mem.pdf
 
 *.pdf
 *.docx
+
+.env.dev
+.env.prod 
