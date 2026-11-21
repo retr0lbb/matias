@@ -28,6 +28,7 @@ import { assignIds } from './build/assign-ids.js';
 import { applyPatch } from './patch/apply-patch.js';
 import { PdfRendererService } from './pdf/pdf-renderer.service.js';
 import { renderAnswerKey } from './render/render-answer-key.js';
+import { renderAssessmentDocx } from './render/render-docx.js';
 import { renderAssessmentHtml } from './render/render-html.js';
 import {
   ASSESSMENT_SCHEMA_VERSION,
@@ -80,6 +81,11 @@ export interface AssessmentView {
 export interface RenderedPdf {
   filename: string;
   pdf: Buffer;
+}
+
+export interface RenderedDocx {
+  filename: string;
+  docx: Buffer;
 }
 
 const FALLBACK_FILENAME = 'avaliacao';
@@ -281,6 +287,19 @@ export class AssessmentsService {
     return {
       filename: `${toFilename(document.content.title)}.pdf`,
       pdf: await this.pdfRenderer.render(html),
+    };
+  }
+
+  async renderDocx(id: string, userId: string): Promise<RenderedDocx> {
+    const { document } = await this.get(id, userId);
+
+    return {
+      filename: `${toFilename(document.content.title)}.docx`,
+      docx: await renderAssessmentDocx(
+        document.content,
+        document.header,
+        document.theme,
+      ),
     };
   }
 

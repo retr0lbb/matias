@@ -258,8 +258,8 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 
 ### Estado
 
-- **Feitas:** Fases 0, 1, 2 e 3 (commitadas) e Fase 4 (patch, ainda sem commit).
-- **Pendentes:** Fase 5 (DOCX) e Fase 6 (teste de fluxo ponta a ponta).
+- **Feitas:** Fases 0 a 4 (commitadas) e Fase 5 (DOCX, 21/11/2026).
+- **Pendentes:** Fase 6 (teste de fluxo ponta a ponta).
 - **Próximo trabalho:** generalização para blocos e tipos de documento, descrita em [`document-blocks.md`](document-blocks.md). Ela renomeia rotas, tabela, campos do JSON e operações de patch citados neste arquivo.
 
 ### Mudanças em relação ao plano
@@ -275,6 +275,7 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 - Cota: 30 créditos por ciclo nos dois planos. Cada documento inclui 7 mudanças por IA (`revise` ou `regenerate`); a 8ª consome mais um crédito e cobre da 8ª à 14ª, e assim por diante. Patch manual não consome nada.
 - As Fases 1 a 4 não têm specs unitários (os testes ficaram com o autor do repositório). Só existe o e2e do Chromium (`pdf-renderer.e2e-spec.ts`).
 - `specs/document-builder.md` foi removido.
+- Fase 5: `render/render-docx.ts` (`renderAssessmentDocx`) e `render/image-size.ts` (lê largura/altura do PNG/JPEG para a logo não distorcer). Rota `GET /documents/assessments/:id/docx`. Só a prova; o gabarito continua em PDF/HTML. Campos em branco do cabeçalho usam tabulação com guia de sublinhado; Turma/Data/Nota ficam numa tabela sem bordas. Sem `render-docx.spec.ts` (testes com o autor); a verificação foi descartável: fixtures → `.docx` → `mammoth`, sem Word nem LibreOffice na máquina para conferir a abertura.
 
 ### A investigar
 
