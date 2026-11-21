@@ -35,7 +35,9 @@ export class AccountLinker extends OidcAccountResolver{
             profile.email,
         );
 
-        if(existingEmail && existingEmail.loginProvider === "LOCAL"){
+        // Any other account with this email: a LOCAL one, or a GOOGLE one tied to
+        // a different Google subject. Inserting would hit the unique email (500).
+        if(existingEmail){
             throw new ConflictException(
                 "An account already exists. Sign in using your original method.",
             );

@@ -169,3 +169,5 @@ Cookie: {{cookie}}
 {
     "version": 3
 }
+
+# http://localhost:3000/auth/oidc/google/login?redirectTo=/me

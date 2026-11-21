@@ -45,6 +45,9 @@ import { UsageModule } from "./usage/usage.module.js";
 			emailVerification: { url: `${process.env.APP_URL}/verify-email` },
 			oidc: {
 				callbackUrl: `${process.env.GOOGLE_REDIRECT_URL}`,
+				// Where the browser lands after Google when the login had no `redirectTo`
+				// (the library default is `/` on this API, which has no route).
+				redirectAfterLogin: process.env.APP_URL ?? "/me",
 				providers: {
 					google: google({
 						clientId: process.env.GOOGLE_CLIENT_ID!,
