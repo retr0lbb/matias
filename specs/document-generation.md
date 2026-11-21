@@ -258,8 +258,7 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 
 ### Estado
 
-- **Feitas:** Fases 0, 1, 2 e 3 (commitadas) e Fase 4 (patch, ainda sem commit).
-- **Pendentes:** Fase 5 (DOCX) e Fase 6 (teste de fluxo ponta a ponta).
+- **Feitas:** Fases 0 a 6 (Fase 5 DOCX e Fase 6 fluxo e2e em 21/11/2026).
 - **Próximo trabalho:** generalização para blocos e tipos de documento, descrita em [`document-blocks.md`](document-blocks.md). Ela renomeia rotas, tabela, campos do JSON e operações de patch citados neste arquivo.
 
 ### Mudanças em relação ao plano
@@ -275,8 +274,12 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 - Cota: 30 créditos por ciclo nos dois planos. Cada documento inclui 7 mudanças por IA (`revise` ou `regenerate`); a 8ª consome mais um crédito e cobre da 8ª à 14ª, e assim por diante. Patch manual não consome nada.
 - As Fases 1 a 4 não têm specs unitários (os testes ficaram com o autor do repositório). Só existe o e2e do Chromium (`pdf-renderer.e2e-spec.ts`).
 - `specs/document-builder.md` foi removido.
+- Fase 6: `src/documents/assessment-flow.e2e-spec.ts` (fora de `assessment/`, que foi achatada). Usa o `AssessmentAiService` real com só o `generateContent` do cliente Gemini simulado, então o parse de JSON, o Zod e o retry são os de produção. Cobre: geração válida e retry com os erros, HTML/PDF sem respostas, DOCX com os mesmos enunciados, gabarito em PDF, `revise` com patch válido (refletido em HTML, PDF e DOCX, original intacto), patch com id inexistente e com seção vazia rejeitados, e 422 depois de dois patches inválidos da IA. Grava as saídas em `.tmp/assessment-flow/`.
+- Fase 5: `render/render-docx.ts` (`renderAssessmentDocx`) e `render/image-size.ts` (lê largura/altura do PNG/JPEG para a logo não distorcer). Rota `GET /documents/assessments/:id/docx`. Só a prova; o gabarito continua em PDF/HTML. Campos em branco do cabeçalho usam tabulação com guia de sublinhado; Turma/Data/Nota ficam numa tabela sem bordas. Sem `render-docx.spec.ts` (testes com o autor); a verificação foi descartável: fixtures → `.docx` → `mammoth`, sem Word nem LibreOffice na máquina para conferir a abertura.
 
 ### A investigar
+
+0. **`pdf-renderer.e2e-spec.ts` falha com o Chromium atual:** o Playwright 1.65 pede o build 1254 do Chromium (a máquina tinha o 1208; foi instalado com `npx playwright install chromium`). Com ele, a fixture `multiSectionAssessment` sai com 2 páginas e o teste espera 1. O HTML e o CSS não mudaram; provavelmente é métrica de fonte ou de layout do novo Chromium.
 
 1. **Gemini responde 400 (`INVALID_ARGUMENT`) ao schema de patch em `responseJsonSchema`.** O que já se sabe:
    - a união com uma única operação (`set_title`) é aceita;

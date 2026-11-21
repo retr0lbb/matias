@@ -15,7 +15,12 @@ import { z } from "zod/v4";
 import type { User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
 import { THINKING_LEVELS } from "../usage/plan-limits.js";
-import { AssessmentsService, type AssessmentView, type RenderedPdf } from "./documents.service.js";
+import {
+	AssessmentsService,
+	type AssessmentView,
+	type RenderedDocx,
+	type RenderedPdf,
+} from "./documents.service.js";
 import { headerSchema } from "./schemas/header.schema.js";
 import { patchSchema } from "./schemas/patch.schema.js";
 import { themeSchema } from "./schemas/theme.schema.js";
@@ -62,6 +67,16 @@ function toPdfFile({ filename, pdf }: RenderedPdf): StreamableFile {
 		type: "application/pdf",
 		disposition: `attachment; filename="${filename}"`,
 		length: pdf.length,
+	});
+}
+
+const DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+function toDocxFile({ filename, docx }: RenderedDocx): StreamableFile {
+	return new StreamableFile(docx, {
+		type: DOCX_TYPE,
+		disposition: `attachment; filename="${filename}"`,
+		length: docx.length,
 	});
 }
 
@@ -126,6 +141,14 @@ export class AssessmentsController {
 		@CurrentUser() user: User,
 	): Promise<StreamableFile> {
 		return toPdfFile(await this.assessmentsService.renderPdf(id, user.id));
+	}
+
+	@Get(":id/docx")
+	async docx(
+		@Param("id", ParseUUIDPipe) id: string,
+		@CurrentUser() user: User,
+	): Promise<StreamableFile> {
+		return toDocxFile(await this.assessmentsService.renderDocx(id, user.id));
 	}
 
 	@Get(":id/answer-key")

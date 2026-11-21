@@ -125,6 +125,10 @@ Cookie: {{cookie}}
 GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
 Cookie: {{cookie}}
 
+### ASSESSMENT: DOCX
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/docx
+Cookie: {{cookie}}
+
 ### ASSESSMENT: answer key PDF
 GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
 Cookie: {{cookie}}
