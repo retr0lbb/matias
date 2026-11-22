@@ -6,15 +6,15 @@ MATIAS can read a teacher's Google Classroom classes and create homework there f
 
 The code is done and unit tested, but it has not run against real Google yet. To turn it on:
 
-- [ ] **Migration:** run `npm run db:migrate` to create the `google_integrations` table (`drizzle/20261122050422_google_integrations`).
-- [ ] **Plan flag:** set `classroomTools: true` by hand in `plans.limits` on the paid plans. It defaults to `false`, so even paid users get no tools until this is done.
-- [ ] **Env:** add `GOOGLE_TOKEN_ENC_KEY` (`openssl rand -base64 32`). The app does not start without it, and changing it later forces every teacher to reconnect.
+- [x] **Migration:** run `npm run db:migrate` to create the `google_integrations` table (`drizzle/20261122050422_google_integrations`).
+- [x] **Plan flag:** set `classroomTools: true` by hand in `plans.limits` on the paid plans. It defaults to `false`, so even paid users get no tools until this is done.
+- [x] **Env:** add `GOOGLE_TOKEN_ENC_KEY` (`openssl rand -base64 32`). The app does not start without it, and changing it later forces every teacher to reconnect.
 - [ ] **Google Cloud:**
-  - [ ] Enable the Classroom API and the Drive API.
-  - [ ] Add the scopes listed below to the OAuth consent screen.
-  - [ ] Register the second redirect URI, `…/auth/oidc/google-classroom/callback`. An existing `GOOGLE_REDIRECT_URL` ending in `/google/callback` is converted automatically.
+  - [x] Enable the Classroom API and the Drive API.
+  - [x] Add the scopes listed below to the OAuth consent screen.
+  - [ ] Register the second redirect URI, `…/auth/oidc/google-classroom/callback`, on the **same** OAuth web client you use for Google sign-in (APIs & Services → Credentials → your client → Authorized redirect URIs → Add URI). Do not create a new client: both providers use `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. An existing `GOOGLE_REDIRECT_URL` ending in `/google/callback` is converted automatically.
 - [ ] **Test users:** the Classroom scopes are sensitive, so until Google verifies the consent screen only test users (up to 100) can connect. Add your test teacher account.
-- [ ] **Manual end-to-end test:**
+- [x] **Manual end-to-end test:**
   1. Connect via `/auth/oidc/google-classroom/connect`, then check `GET /classroom/status`.
   2. On a paid plan, ask "quais são minhas turmas?" in the chat. `tool` SSE events should stream and the classes should be listed.
   3. Generate an assessment, then ask to post it as homework. A draft with the PDF attached should appear in Classroom.
@@ -38,6 +38,7 @@ Sign-in and Classroom access are separate. Any signed-in user (LOCAL or GOOGLE) 
    - The `google-classroom` provider can never be used to sign in.
 
 Other endpoints:
+
 - `GET /classroom/status` returns `{ connected, email, connectedAt }`.
 - `DELETE /classroom/connection` revokes the token at Google (best effort) and deletes the row.
 
@@ -48,19 +49,19 @@ Access tokens are cached and refreshed one minute before they expire. If Google 
 1. The judge picks tools from `CLASSROOM_TOOL_NAMES` (`src/classroom/classroom-tool-names.ts`).
 2. `AiService.resolveTools` offers them only when all of these hold:
    - the plan has `classroomTools: true` (in `plans.limits`; it defaults to `false`, so **set it by hand on the paid plans**)
-   - the model is not CHEAP
    - Classroom is connected
-3. Otherwise the prompt tells the model why (`PLAN`, `CHEAP_MODEL` or `NOT_CONNECTED`), so it explains instead of pretending.
-4. `streamWithTools` runs the Gemini function-calling loop: at most 4 rounds with tools, then one round without, with tokens summed across rounds. The SSE stream emits `event: tool` with `{ name, status: "running" | "done" | "error" }`.
+3. Otherwise the prompt tells the model why (`PLAN` or `NOT_CONNECTED`), so it explains instead of pretending.
+4. Every tier (CHEAP, NORMAL, EXPENSIVE) can call tools, so AUTO routing never has to move a Classroom request up a tier. CHEAP runs the loop at MINIMAL thinking.
+5. `streamWithTools` runs the Gemini function-calling loop: at most 4 rounds with tools, then one round without, with tokens summed across rounds. The SSE stream emits `event: tool` with `{ name, status: "running" | "done" | "error" }`.
 
 ## Tools
 
-| Tool | Returns |
-|---|---|
-| `classroom_list_courses` | Active classes the user teaches: id, name, section, room, link |
-| `classroom_get_course` | One class plus `studentCount` |
-| `classroom_list_students` | `{ count, students: ["Ana S.", ...] }` |
-| `classroom_list_coursework` | Latest 20 assignments (published and drafts) |
+| Tool                          | Returns                                                                                                                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `classroom_list_courses`      | Active classes the user teaches: id, name, section, room, link                                                                                                          |
+| `classroom_get_course`        | One class plus `studentCount`                                                                                                                                           |
+| `classroom_list_students`     | `{ count, students: ["Ana S.", ...] }`                                                                                                                                  |
+| `classroom_list_coursework`   | Latest 20 assignments (published and drafts)                                                                                                                            |
 | `classroom_create_assignment` | Creates a **DRAFT** assignment. Optional `assessmentId` attaches a generated assessment as a PDF uploaded to the teacher's Drive. Due date and time are São Paulo time. |
 
 Errors come back to the model as `{ error: "NOT_CONNECTED" | "PERMISSION_DENIED" | "NOT_FOUND" | "INVALID_ARGS" | "UNAVAILABLE" | "UNKNOWN_TOOL" }`.

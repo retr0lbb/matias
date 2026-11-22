@@ -13,18 +13,6 @@ export class AiController {
 	constructor(private readonly aiService: AiService) {}
 
 	@Authenticate({ verifiedEmail: true })
-	@Post()
-	//Da pra passar o conversation ID tanto de quey ou de body opcional,
-	//Dps ver como lidar com conversation ID invalido e como separar melhor essa funcao
-	async chat(
-		@Body(new ZodValidationPipe(chatBodySchema)) body: ChatBody,
-		@CurrentUser() user: User,
-		@Query("conversationId") conversationId: string,
-	) {
-		return this.aiService.chat(body.prompt, user.id, conversationId, body);
-	}
-
-	@Authenticate({ verifiedEmail: true })
 	@Post("stream")
 	async chatStream(
 		@Body(new ZodValidationPipe(chatBodySchema)) body: ChatBody,

@@ -41,6 +41,8 @@ export type MessageMetadata = {
     selection?: "AUTO" | "MANUAL",
     /** Tier the judge wanted before AUTO downgraded it for lack of quota. */
     downgradedFrom?: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    /** Tier picked (judge or user) before a document turn raised it to what the document needs. */
+    upgradedFrom?: "CHEAP" | "NORMAL" | "EXPENSIVE",
     /** User-facing thinking level the turn ran with (already allowed by the plan). */
     thinkingOption?: "DEFAULT" | "HIGH" | "ULTRA_HIGH",
     /** Model requested by the app. */
@@ -55,8 +57,26 @@ export type MessageMetadata = {
     thinking?: string,
     judge?: JudgeMetadata,
     /** Tools called this turn: name, outcome and latency only (no arguments or results). */
-    tools?: { name: string, ok: boolean, latencyMs: number }[]
+    tools?: { name: string, ok: boolean, latencyMs: number }[],
+    /** Document work of this turn. ASK_HEADER marks the turn that asked for header details. */
+    document?: DocumentTurnMetadata
 }
+
+export type DocumentTurnMetadata =
+    | { action: "ASK_HEADER", type: string, missing: string[] }
+    | {
+        action: "CREATE" | "REVISE" | "REGENERATE",
+        type: string,
+        ok: boolean,
+        /** The saved document; missing when it failed. */
+        id?: string,
+        /** Document AI usage, summed over its attempts. */
+        modelName?: string,
+        modelId?: string,
+        latencyMs?: number,
+        attempts?: number,
+        tokens?: MessageTokenUsage
+    }
 
 export const messagesTable = pgTable("messages", 
     {

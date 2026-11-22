@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { aiHeaderSchema } from './header.schema.js';
 
 export const DEFAULT_OPEN_ENDED_LINES = 5;
 export const MAX_OPEN_ENDED_LINES = 30;
@@ -65,6 +66,11 @@ export const aiAssessmentSchema = z.object({
   sections: z.array(aiSectionSchema).min(1),
 });
 
+/** What generation returns: the content plus any header text the teacher gave. */
+export const aiAssessmentDraftSchema = aiAssessmentSchema.extend({
+  header: aiHeaderSchema.optional(),
+});
+
 // What the server stores: the same content plus server-generated ids.
 
 export const questionSchema = z.discriminatedUnion('kind', [
@@ -114,6 +120,7 @@ export const assessmentContentSchema = z
 
 /** AI output after validation (defaults applied). */
 export type AiAssessment = z.infer<typeof aiAssessmentSchema>;
+export type AiAssessmentDraft = z.infer<typeof aiAssessmentDraftSchema>;
 /** AI output before validation (`lines` may be missing). */
 export type AiAssessmentInput = z.input<typeof aiAssessmentSchema>;
 export type AiQuestion = z.infer<typeof aiQuestionSchema>;

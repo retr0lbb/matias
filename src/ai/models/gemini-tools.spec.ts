@@ -4,7 +4,6 @@ import type { ToolRuntime } from "../../shared/tools/tool-runtime.js";
 import type { AIStreamChunk } from "../ai-provider.type.js";
 import {
 	type GeminiStreamClient,
-	generateWithTools,
 	MAX_TOOL_ROUNDS,
 	streamWithTools,
 	type ToolLoopRequest,
@@ -299,25 +298,5 @@ describe("streamWithTools", () => {
 				),
 			),
 		).rejects.toThrow("quota");
-	});
-});
-
-describe("generateWithTools", () => {
-	afterEach(() => {
-		vi.clearAllMocks();
-	});
-
-	it("should return the final response of the loop", async () => {
-		const { client } = createClient([
-			[chunk([callPart("classroom_list_courses")])],
-			[chunk([{ text: "feito" }])],
-		]);
-		const { runtime, execute } = createRuntime();
-		execute.mockResolvedValue({ courses: [] });
-
-		const response = await generateWithTools(client, buildRequest(), runtime, STARTED_AT);
-
-		expect(response.output_text).toBe("feito");
-		expect(response.toolCalls).toHaveLength(1);
 	});
 });

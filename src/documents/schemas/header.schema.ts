@@ -24,7 +24,10 @@ export const headerFieldsSchema = z.object({
   score: z.boolean().default(DEFAULT_HEADER_FIELDS.score),
 });
 
-/** Never produced by the AI: comes from the institution/teacher records. */
+/**
+ * The AI may only fill the text fields, and only with values the teacher
+ * wrote in the conversation. The logo and the visible fields stay out of its reach.
+ */
 export const headerSchema = z.object({
   institutionName: text.optional(),
   logo: z.string().max(MAX_LOGO_LENGTH).regex(LOGO_PATTERN).optional(),
@@ -34,5 +37,17 @@ export const headerSchema = z.object({
   fields: headerFieldsSchema.default(DEFAULT_HEADER_FIELDS),
 });
 
+/** Header text the document AI copies from the conversation; every field optional. */
+export const aiHeaderSchema = headerSchema.pick({
+  institutionName: true,
+  teacherName: true,
+  subject: true,
+  className: true,
+});
+
+export const AI_HEADER_FIELDS = ['institutionName', 'teacherName', 'subject', 'className'] as const;
+export type AiHeaderField = (typeof AI_HEADER_FIELDS)[number];
+
 export type AssessmentHeader = z.infer<typeof headerSchema>;
+export type AiHeader = z.infer<typeof aiHeaderSchema>;
 export type AssessmentHeaderInput = z.input<typeof headerSchema>;

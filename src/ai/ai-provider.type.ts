@@ -8,12 +8,11 @@ export type GenerateInput = {
 	prompt: PromptProps;
 	/** Already clamped to the plan's max. CHEAP ignores it (always MINIMAL). */
 	thinkingLevel: ThinkingLevelOption;
-	/** Tools the model may call this turn. CHEAP ignores them. */
+	/** Tools the model may call this turn. */
 	tools?: ToolRuntime;
 };
 
 export interface AiProvider {
-	generate(input: GenerateInput): Promise<AIResponse>;
 	generateStream(input: GenerateInput & { signal?: AbortSignal }): AsyncGenerator<AIStreamChunk>;
 }
 

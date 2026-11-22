@@ -134,19 +134,6 @@ export async function* streamWithTools(
 	yield { type: "done", response };
 }
 
-/** Runs the loop to the end and returns the final response, for the non-streaming `generate`. */
-export async function generateWithTools(
-	client: GeminiStreamClient,
-	request: ToolLoopRequest,
-	tools: ToolRuntime,
-	startedAt: Date,
-): Promise<AIResponse> {
-	for await (const chunk of streamWithTools(client, request, tools, startedAt)) {
-		if (chunk.type === "done") return chunk.response;
-	}
-	throw new Error("Tool loop ended without a response");
-}
-
 function emptyTokens(): MessageTokenUsage {
 	return { prompt: 0, output: 0, thoughts: 0, cached: 0, total: 0 };
 }

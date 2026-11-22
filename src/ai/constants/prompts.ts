@@ -2,11 +2,17 @@ import {
 	CLASSROOM_TOOL_NAMES,
 	CLASSROOM_TOOL_SUMMARIES,
 } from "../../classroom/classroom-tool-names.js";
-import type { User } from "../../db/schemas/user.js";
+import {
+	DOCUMENT_TYPE_LABELS,
+	DOCUMENT_TYPE_SUMMARIES,
+	DOCUMENT_TYPES,
+	type DocumentType,
+} from "../../documents/document-types.js";
+import type { AiHeaderField } from "../../documents/schemas/header.schema.js";
 import { AIExpense } from "../ai.factory.js";
 
 /** Why the Classroom tools the judge picked are not offered this turn. */
-export type ToolsUnavailableReason = "PLAN" | "NOT_CONNECTED" | "CHEAP_MODEL";
+export type ToolsUnavailableReason = "PLAN" | "NOT_CONNECTED";
 
 export type ToolsPromptContext = {
 	/** Set when the tools were asked for but are not offered. */
@@ -15,14 +21,27 @@ export type ToolsPromptContext = {
 	assessments: { id: string; title: string }[];
 };
 
+export type GeneratedDocumentAction = "CREATE" | "REVISE" | "REGENERATE";
+
+/** What happened with the document this turn, so the chat answer can talk about it. */
+export type DocumentPromptContext =
+	| { status: "ASK_HEADER"; type: DocumentType; missing: AiHeaderField[] }
+	| { status: "DONE"; action: GeneratedDocumentAction; type: DocumentType; summary: string }
+	| {
+			status: "FAILED";
+			action: GeneratedDocumentAction;
+			type: DocumentType;
+			reason: "INVALID_OUTPUT" | "NO_CHANGE" | "UNAVAILABLE";
+	  };
+
 export type PromptProps = {
 	tier: AIExpense;
 	needRetrieval: boolean;
 	needTools: boolean;
-	needDocumentGeneration: boolean;
-	userInfo?: Omit<User, "passwordHash" | "id">;
 	/** Only read when `needTools`. */
 	tools?: ToolsPromptContext;
+	/** Set on turns where the judge found a document request. */
+	document?: DocumentPromptContext;
 };
 
 // --- Identidade ---------------------------------------------------------
@@ -78,9 +97,48 @@ const TOOLS_UNAVAILABLE: Record<ToolsUnavailableReason, string> = {
 	PLAN: "As ferramentas do Google Classroom não estão incluídas no plano do usuário. Se ele pedir algo no Classroom, explique que o recurso faz parte dos planos pagos e não finja ter acessado o Classroom.",
 	NOT_CONNECTED:
 		"O usuário ainda não conectou o Google Classroom. Se ele pedir algo no Classroom, explique que é preciso conectar a conta Google em Configurações > Google Classroom e não finja ter acessado o Classroom.",
-	CHEAP_MODEL:
-		"As ferramentas do Google Classroom não estão disponíveis no modelo rápido. Se o usuário pedir algo no Classroom, sugira escolher outro modelo e não finja ter acessado o Classroom.",
 };
+
+const DOCUMENT_TURN = `Documentos gerados pelo chat:
+- O documento é gerado pelo sistema antes da sua resposta e fica salvo; o professor o vê no painel do documento, onde pode baixar em PDF ou DOCX e ver o gabarito.
+- Não repita as questões nem o gabarito na resposta. Resuma em poucas linhas o que foi feito e ofereça ajustes ("é só pedir aqui no chat").
+- Nunca diga que gerou ou alterou um documento se o resumo abaixo não disser que deu certo.`;
+
+const HEADER_FIELD_LABELS: Record<AiHeaderField, string> = {
+	institutionName: "nome da escola",
+	teacherName: "nome do professor ou professora",
+	subject: "disciplina",
+	className: "turma",
+};
+
+const ACTION_LABELS: Record<GeneratedDocumentAction, string> = {
+	CREATE: "criada",
+	REVISE: "alterada",
+	REGENERATE: "refeita",
+};
+
+const FAILURE_LABELS: Record<Extract<DocumentPromptContext, { status: "FAILED" }>["reason"], string> =
+	{
+		INVALID_OUTPUT: "a IA não conseguiu montar um documento válido",
+		NO_CHANGE: "o pedido não resultou em nenhuma mudança possível (por exemplo, trocar a logo ou o nome da escola não é feito pelo chat)",
+		UNAVAILABLE: "o serviço de IA está indisponível no momento",
+	};
+
+function documentSection(document: DocumentPromptContext): string {
+	const label = DOCUMENT_TYPE_LABELS[document.type];
+
+	switch (document.status) {
+		case "ASK_HEADER":
+			return `O professor pediu uma ${label}, mas ainda faltam dados do cabeçalho: ${document.missing
+				.map((field) => HEADER_FIELD_LABELS[field])
+				.join(", ")}.
+Antes de gerar, pergunte esses dados em uma única mensagem curta e amigável. Diga que ele pode pular algum, e que a ${label} será gerada assim que ele responder. Não gere a ${label} nem escreva questões agora.`;
+		case "DONE":
+			return `Resultado: a ${label} foi ${ACTION_LABELS[document.action]} com sucesso.\n${document.summary}`;
+		case "FAILED":
+			return `Resultado: a ${label} NÃO foi ${ACTION_LABELS[document.action]}, porque ${FAILURE_LABELS[document.reason]}. Explique isso em linguagem simples e sugira tentar de novo ou reformular o pedido. Nenhum crédito foi gasto.`;
+	}
+}
 
 function toolsSections(props: PromptProps): { fixed: string | null; dynamic: string | null } {
 	if (!props.needTools) return { fixed: null, dynamic: null };
@@ -109,13 +167,12 @@ export function buildPrompt(props: PromptProps): string {
 	const sections = [
 		compact ? IDENTITY_COMPACT : IDENTITY_FULL,
 		props.needRetrieval ? (compact ? RETRIEVAL_COMPACT : RETRIEVAL_FULL) : null,
-		props.needDocumentGeneration ? (compact ? DOCGEN_COMPACT : DOCGEN_FULL) : null,
+		props.document ? (compact ? DOCGEN_COMPACT : DOCGEN_FULL) : null,
+		props.document ? DOCUMENT_TURN : null,
 		tools.fixed,
 		// dinâmico sempre por último, para não quebrar o cache do prefixo
 		tools.dynamic,
-		props.userInfo
-			? `Informações do usuário (use só se for relevante):\n${JSON.stringify(props.userInfo)}`
-			: null,
+		props.document ? documentSection(props.document) : null,
 	];
 
 	return sections.filter(Boolean).join("\n\n");
@@ -126,6 +183,8 @@ export function buildPrompt(props: PromptProps): string {
 export type JudgePromptProps = {
 	prompt: string;
 	history: { role: "USER" | "IA"; content: string | null }[];
+	/** Documents of this conversation, newest first, so the judge can target one. */
+	documents: { id: string; type: DocumentType; title: string }[];
 	/** False when the user already picked the model, so the judge skips routing. */
 	routeModel: boolean;
 };
@@ -135,7 +194,19 @@ const JUDGE_ROUTING = `- The appropriate model tier.`;
 const JUDGE_ROUTING_RULES = `How to classify a message:
 - Simple message asking a question that might need retrieval: CHEAP
 - Longer message asking for directions, a plan, or advanced retrieval: NORMAL
-- Complex questions that need extensive tools, retrieval or advanced document generation: EXPENSIVE`;
+- Complex questions that need extensive tools, retrieval or advanced reasoning: EXPENSIVE
+- A document turn is never CHEAP: CREATE or REGENERATE with STANDARD complexity and every REVISE is NORMAL; ADVANCED complexity is EXPENSIVE.`;
+
+const JUDGE_DOCUMENT_RULES = `How to fill "document":
+- CREATE: the teacher asks for a new document of a registered type ("faz uma prova", "monta uma lista de exercícios").
+- REVISE: the teacher asks to change part of a document listed below (a question, the title, points, the look). Set targetId to its id; when it is unclear which one, use the first (newest).
+- REGENERATE: the teacher asks to redo a listed document from scratch. Set targetId as for REVISE.
+- NONE: anything else, including questions about a document or only posting it to Google Classroom.
+- A message that answers the assistant's question about header details (school, teacher, subject, class) right after a document request is CREATE for that request.
+- type: the registered type that fits; required unless NONE.
+- complexity (CREATE and REGENERATE): ADVANCED when the document is long (more than about 15 questions), covers several topics, must be based on the teacher's uploaded files, uses entrance-exam style questions (ENEM, vestibular), or needs elaborate answer keys; otherwise STANDARD.
+- missingHeader (CREATE): which of institutionName (school name), teacherName, subject and className the teacher has NOT stated anywhere in the history or the latest message. Empty when all are known. If the teacher said to skip them, return an empty list.
+- When a document should be based on the teacher's files, also set retrieve to true.`;
 
 export function buildJudgePrompt(props: JudgePromptProps): string {
 	return [
@@ -146,8 +217,16 @@ You must determine:`,
 		props.routeModel ? JUDGE_ROUTING : null,
 		`- Whether document retrieval is necessary.
 - Which registered tools are required (empty when none). Pick a tool only when the teacher asks about their Google Classroom classes, students or assignments, or to post homework there.
+- Whether the teacher wants a document created, changed or redone ("document").
 - A short title IF and ONLY IF the history is empty.`,
 		`Registered tools:\n${CLASSROOM_TOOL_NAMES.map((name) => `- ${name}: ${CLASSROOM_TOOL_SUMMARIES[name]}`).join("\n")}`,
+		`Registered document types:\n${DOCUMENT_TYPES.map((type) => `- ${type}: ${DOCUMENT_TYPE_SUMMARIES[type]}`).join("\n")}`,
+		`Documents of this conversation (newest first):\n${
+			props.documents.length > 0
+				? props.documents.map((doc) => `- ${doc.id} (${doc.type}): ${JSON.stringify(doc.title)}`).join("\n")
+				: "(none)"
+		}`,
+		JUDGE_DOCUMENT_RULES,
 		props.routeModel ? JUDGE_ROUTING_RULES : null,
 		`{CONVERSATION_HISTORY}\n${JSON.stringify(props.history)}`,
 		`{USER_LATEST_MESSAGE}\n${props.prompt}`,

@@ -1,5 +1,7 @@
 # Especificação: RAG com PGVector (upload de PDF/DOCX → top 5 chunks)
 
+> **Atualização (2026-11-22):** `POST /ai/chat` e `AiService.chat()` foram removidos. A única rota de chat agora é `POST /ai/chat/stream` (SSE); onde este documento diz `POST /ai/chat`, leia `POST /ai/chat/stream`. O fluxo de RAG é o mesmo. A rota de debug `GET /rag/search` também foi removida; a busca acontece só dentro do chat.
+
 ## Contexto
 
 API NestJS v12 + TypeScript, PostgreSQL com `pgvector` (imagem `pgvector/pgvector:pg16` já no `docker-compose.yaml`), Drizzle ORM e SDK `@google/genai`.
