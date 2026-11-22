@@ -72,6 +72,27 @@ export class PaymentService {
 	}
 
 	/**
+	 * Deactivates an Asaas subscription (`sub_...`) without deleting it: Asaas
+	 * stops generating charges but the subscription and its history remain.
+	 */
+	async deactivateSubscription(subscriptionId: string): Promise<AsaasSubscription> {
+		return this.updateSubscription(subscriptionId, { status: "INACTIVE" });
+	}
+
+	/**
+	 * Reads an Asaas subscription (`sub_...`). Returns null when Asaas does not
+	 * know the id (404); every other failure throws like the other calls.
+	 */
+	async findSubscription(subscriptionId: string): Promise<AsaasSubscription | null> {
+		return this.request<AsaasSubscription | null>(
+			"GET",
+			`/subscriptions/${encodeURIComponent(subscriptionId)}`,
+			undefined,
+			{ nullOn404: true },
+		);
+	}
+
+	/**
 	 * Lists the charges Asaas already generated for a subscription. The first
 	 * one exists right after the subscription is created.
 	 */
@@ -109,6 +130,7 @@ export class PaymentService {
 		method: "GET" | "POST" | "PUT",
 		path: string,
 		body?: object,
+		options: { nullOn404?: boolean } = {},
 	): Promise<T> {
 		let response: Response;
 
@@ -132,6 +154,10 @@ export class PaymentService {
 				`Asaas ${method} ${path} did not respond: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			throw new ServiceUnavailableException("Payment provider unavailable");
+		}
+
+		if (response.status === 404 && options.nullOn404) {
+			return null as T;
 		}
 
 		if (!response.ok) {

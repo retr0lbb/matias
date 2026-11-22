@@ -13,13 +13,15 @@ The app sells paid plans through **Asaas**, a Brazilian payment provider. Two mo
 
 ## `src/payment`: the Asaas client
 
-`PaymentService` (`payment.service.ts`) has five public methods:
+`PaymentService` (`payment.service.ts`) has these public methods (`findSubscription` and `deactivateSubscription` are used by the cron jobs below):
 
 | Method | What it does |
 |---|---|
 | `createCustomer` | Creates a customer on Asaas and returns it with its `cus_...` id. Asaas does not detect duplicates, so the caller must save and reuse that id. |
 | `createSubscription` | Creates a recurring subscription on Asaas (`sub_...`). Asaas then generates one charge per cycle. |
 | `updateSubscription` | Changes an existing Asaas subscription. Used to remove the promo discount once its cycles are over. |
+| `deactivateSubscription` | Sets an Asaas subscription to `INACTIVE` (it stops charging but is not deleted). |
+| `findSubscription` | Reads an Asaas subscription; returns `null` on 404 instead of throwing. |
 | `listSubscriptionPayments` | Lists the charges (`pay_...`) of a subscription. The first one exists right after creation. |
 | `isValidWebhookToken` | Checks the token Asaas sends on webhooks against `ASAAS_WEBHOOK_TOKEN`. If the variable is not set, every webhook is rejected. |
 
@@ -96,6 +98,21 @@ The events also move the **promo redemption** of the subscription: the first pay
 
 Asaas can deliver the same event twice or out of order, so every step is safe to repeat: activating twice does nothing the second time, and a charge never moves "backwards" (a refunded charge is not marked paid again).
 
+## Cron jobs (`src/shared/crons`)
+
+Two scheduled jobs (`@nestjs/schedule`, `America/Sao_Paulo`) cover what the webhook misses. Each skips a tick while its previous run is still going, and a failure on one subscription is logged and retried on the next run.
+
+**Count Olaf** (`cont_olaf/`, every 30 min) syncs live local subscriptions (`PENDING`, `ACTIVE`, `EXPIRED`) with Asaas:
+
+| Situation | Effect |
+|---|---|
+| `PENDING` with no `asaas_subscription_id`, older than 1h | → `INACTIVE` (`OLAF_NOT_ON_ASAAS`) |
+| Asaas answers 404 or `deleted: true` | → `INACTIVE` (`OLAF_NOT_ON_ASAAS`) |
+| Asaas status `INACTIVE` / `EXPIRED` | → `INACTIVE` (`OLAF_ASAAS_<STATUS>`) |
+| Asaas `ACTIVE` | Every charge is upserted into `payments` through `PaymentRecordService` (same forward-only rules as the webhook). If a charge is paid: a local `PENDING` is activated, then the promo discount is checked. |
+
+**Mr Beliarge** (`mr_beliarge/`, daily 03:00) ends `ACTIVE`/`EXPIRED` subscriptions whose oldest `OVERDUE` charge is due more than 3 days ago (`GRACE_DAYS`): the Asaas subscription is set to `INACTIVE` (not deleted), then the local one goes `INACTIVE` (`BELIARGE_OVERDUE_GRACE_EXPIRED`). If Asaas fails, the local row is left for the next run.
+
 ## Things a newcomer should know
 
 - **Money units:** Asaas works in reais (`29.9`); our database stores cents (`2990`) in both `plans.price` and `payments.value`.
@@ -106,4 +123,4 @@ Asaas can deliver the same event twice or out of order, so every step is safe to
   - The promo discount is an Asaas early-payment discount: a charge paid after its due date is the full price, and the first charge is due the day the user subscribes.
   - `payments.value` keeps the value the charge was created with, not the discounted amount paid.
   - A refund does not cancel the subscription on Asaas.
-  - Orphan subscriptions (created on Asaas, lost locally) are being worked on separately.
+  - Orphan subscriptions created on Asaas but lost locally are not handled; Count Olaf only covers the reverse (local rows missing on Asaas).

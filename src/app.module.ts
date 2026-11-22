@@ -12,6 +12,7 @@ import { DocumentsModule } from "./documents/documents.module.js";
 import { PaymentModule } from "./payment/payment.module.js";
 import { RagModule } from "./rag/rag.module.js";
 import { RouterModule } from "./router/router.module.js";
+import { OlafModule } from "./shared/crons/cont_olaf/olaf.module.js";
 import { BeliargeModule } from "./shared/crons/mr_beliarge/beliarge.module.js";
 import { SharedModule } from "./shared/shared.module.js";
 import { SubscriptionModule } from "./subscription/subscription.module.js";
@@ -66,6 +67,7 @@ import { UsageModule } from "./usage/usage.module.js";
 		SubscriptionModule,
 		PaymentModule,
 		BeliargeModule,
+		OlafModule,
 	],
 })
 export class AppModule {}

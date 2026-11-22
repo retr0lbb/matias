@@ -650,6 +650,94 @@ describe("PaymentService", () => {
 		});
 	});
 
+	describe("findSubscription", () => {
+		it("should return the subscription when Asaas finds it", async () => {
+			const { service } = await buildService();
+			const subscription = buildSubscription({ status: "INACTIVE" });
+			fetchMock.mockResolvedValue(jsonResponse(subscription));
+
+			const result = await service.findSubscription("sub_fake_1");
+
+			expect(result).toEqual(subscription);
+			expect(requestOf().url).toBe(`${SANDBOX_URL}/subscriptions/sub_fake_1`);
+			expect(requestOf().init.method).toBe("GET");
+			expect(requestOf().init).not.toHaveProperty("body");
+		});
+
+		it("should url-encode the subscription id", async () => {
+			const { service } = await buildService();
+			fetchMock.mockResolvedValue(jsonResponse(buildSubscription()));
+
+			await service.findSubscription("sub/../customers?x=1");
+
+			expect(requestOf().url).toBe(`${SANDBOX_URL}/subscriptions/sub%2F..%2Fcustomers%3Fx%3D1`);
+		});
+
+		it("should return null when Asaas answers 404", async () => {
+			const { service } = await buildService();
+			fetchMock.mockResolvedValue(jsonResponse(asaasError(), 404));
+
+			await expect(service.findSubscription("sub_missing")).resolves.toBeNull();
+			expect(errorLog).not.toHaveBeenCalled();
+		});
+
+		it.each([401, 403, 500, 502])(
+			"should throw BadGatewayException when Asaas answers %i",
+			async (status) => {
+				const { service } = await buildService();
+				fetchMock.mockResolvedValue(jsonResponse(asaasError(), status));
+
+				await expect(service.findSubscription("sub_fake_1")).rejects.toThrow(
+					BadGatewayException,
+				);
+			},
+		);
+
+		it("should throw ServiceUnavailableException when Asaas does not respond", async () => {
+			const { service } = await buildService();
+			fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+
+			await expect(service.findSubscription("sub_fake_1")).rejects.toThrow(
+				ServiceUnavailableException,
+			);
+		});
+	});
+
+	describe("deactivateSubscription", () => {
+		it("should send status INACTIVE with PUT when deactivating a subscription", async () => {
+			const { service } = await buildService();
+			const subscription = buildSubscription({ status: "INACTIVE" });
+			fetchMock.mockResolvedValue(jsonResponse(subscription));
+
+			const result = await service.deactivateSubscription("sub_fake_1");
+
+			expect(result).toEqual(subscription);
+			expect(requestOf().url).toBe(`${SANDBOX_URL}/subscriptions/sub_fake_1`);
+			expect(requestOf().init.method).toBe("PUT");
+			expect(requestOf().body).toEqual({ status: "INACTIVE" });
+		});
+
+		it("should throw BadGatewayException when Asaas answers 404", async () => {
+			const { service } = await buildService();
+			fetchMock.mockResolvedValue(jsonResponse(asaasError(), 404));
+
+			await expect(service.deactivateSubscription("sub_missing")).rejects.toThrow(
+				BadGatewayException,
+			);
+		});
+
+		it("should throw BadRequestException when Asaas answers 400", async () => {
+			const { service } = await buildService();
+			fetchMock.mockResolvedValue(
+				jsonResponse(asaasError({ code: "invalid_action", description: "Not allowed" }), 400),
+			);
+
+			await expect(service.deactivateSubscription("sub_fake_1")).rejects.toThrow(
+				BadRequestException,
+			);
+		});
+	});
+
 	describe("isValidWebhookToken", () => {
 		it("should return true when the token matches the configured one", async () => {
 			const { service } = await buildService();

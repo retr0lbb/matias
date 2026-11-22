@@ -23,6 +23,8 @@ export interface UpdateAsaasSubscriptionInput {
 	discount?: AsaasDiscount;
 	/** Also applies the change to charges already generated and not yet paid. */
 	updatePendingPayments?: boolean;
+	/** `INACTIVE` pauses the subscription on Asaas without deleting it. */
+	status?: "ACTIVE" | "INACTIVE";
 }
 
 export interface CreateAsaasSubscriptionInput {

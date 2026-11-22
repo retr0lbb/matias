@@ -1,9 +1,11 @@
 import { Module } from "@nestjs/common";
-import { MrBeliargeController } from "./beliarge.controller.js";
+import { PaymentModule } from "../../../payment/payment.module.js";
+import { SubscriptionModule } from "../../../subscription/subscription.module.js";
+import { MrBeliargeJob } from "./beliarge.job.js";
 import { MrBeliargeService } from "./beliarge.service.js";
 
 @Module({
-	providers: [MrBeliargeService],
-	controllers: [MrBeliargeController],
+	imports: [PaymentModule, SubscriptionModule],
+	providers: [MrBeliargeService, MrBeliargeJob],
 })
 export class BeliargeModule {}
