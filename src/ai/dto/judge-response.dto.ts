@@ -1,10 +1,7 @@
 import z from "zod/v4";
+import { CLASSROOM_TOOL_NAMES } from "../../classroom/classroom-tool-names.js";
 
-export const TOOL_NAMES = [
-	"classroom.list_classrooms",
-	"classroom.list_students",
-	"classroom.get_assignments",
-] as const;
+export const TOOL_NAMES = CLASSROOM_TOOL_NAMES;
 
 export const JUDGE_MODELS = ["CHEAP", "NORMAL", "EXPENSIVE"] as const;
 

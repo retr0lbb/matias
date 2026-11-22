@@ -8,10 +8,12 @@ import {
 import { InjectDrizzle } from "@nestjs/drizzle";
 import { desc, eq } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { ClassroomToolsService } from "../classroom/classroom-tools.service.js";
 import { conversationsTable } from "../db/schemas/conversation.js";
 import { type MessageMetadata, messagesTable } from "../db/schemas/message.js";
 import { userTable } from "../db/schemas/user.js";
 import { RagSearchResult, RagService } from "../rag/rag.service.js";
+import type { ToolRuntime } from "../shared/tools/tool-runtime.js";
 import {
 	type QuotaExceededBody,
 	QuotaExceededException,
@@ -20,6 +22,7 @@ import type { ThinkingLevelOption } from "../usage/plan-limits.js";
 import { type ChatAllowance, UsageService } from "../usage/usage.service.js";
 import { AIExpense, AiExpensesFactory } from "./ai.factory.js";
 import type { AIResponse } from "./ai-provider.type.js";
+import type { ToolsPromptContext } from "./constants/prompts.js";
 import type { ChatOptions } from "./dto/chat-body.dto.js";
 import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js";
 import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
@@ -49,6 +52,12 @@ interface Turn {
 	judge: JudgeClassification;
 }
 
+/** Tools for a turn whose judge picked some: a runtime when offered, and the prompt context. */
+interface TurnTools {
+	runtime?: ToolRuntime;
+	prompt: ToolsPromptContext;
+}
+
 @Injectable()
 export class AiService {
 	private readonly logger = new Logger(AiService.name);
@@ -59,6 +68,7 @@ export class AiService {
 		private readonly ragService: RagService,
 		private readonly usageService: UsageService,
 		private readonly judgeModel: JudgeModel,
+		private readonly classroomTools: ClassroomToolsService,
 	) {}
 
 	async chat(
@@ -161,14 +171,17 @@ export class AiService {
 		});
 
 		const provider = this.aiFactory.create(turn.model);
+		const tools = await this.resolveTools(user.id, conversation.id, turn, allowance);
 
 		this.logger.log(`[RAG] retrieve=${judgeResponse.retrieve} conversationId=${conversationId}`);
 		const message = await provider.generate({
 			message: input,
 			thinkingLevel: turn.thinkingLevel,
+			tools: tools?.runtime,
 			prompt: {
 				needRetrieval: judgeResponse.retrieve,
-				needTools: false, // hard coded false
+				needTools: Boolean(tools),
+				tools: tools?.prompt,
 				tier: turn.model,
 				userInfo: user,
 				needDocumentGeneration: false,
@@ -318,6 +331,12 @@ export class AiService {
 			});
 
 			const provider = this.aiFactory.create(turn.model);
+			const tools = await this.resolveTools(
+				ctx.user.id,
+				ctx.conversation.id,
+				turn,
+				ctx.allowance,
+			);
 
 			yield {
 				type: "status",
@@ -334,10 +353,12 @@ export class AiService {
 				message: input,
 				signal,
 				thinkingLevel: turn.thinkingLevel,
+				tools: tools?.runtime,
 				prompt: {
 					needDocumentGeneration: false,
 					needRetrieval: judgeResponse.retrieve,
-					needTools: false,
+					needTools: Boolean(tools),
+					tools: tools?.prompt,
 					tier: turn.model,
 				},
 			})) {
@@ -347,6 +368,8 @@ export class AiService {
 				} else if (chunk.type === "thinking") {
 					partialThinking += chunk.text;
 					yield { type: "thinking", data: { text: chunk.text } };
+				} else if (chunk.type === "tool") {
+					yield { type: "tool", data: { name: chunk.name, status: chunk.status } };
 				} else {
 					final = chunk.response;
 				}
@@ -502,7 +525,44 @@ export class AiService {
 			latencyMs: Date.parse(final.updated) - Date.parse(final.created),
 			tokens: final.tokens,
 			thinking,
+			...(final.toolCalls?.length && { tools: final.toolCalls }),
 		};
+	}
+
+	/**
+	 * Undefined when the judge picked no tool. Otherwise the tools are offered
+	 * only to a paid plan with Classroom connected on a non-CHEAP model; in any
+	 * other case the prompt says why, so the model can tell the user.
+	 */
+	private async resolveTools(
+		userId: string,
+		conversationId: string,
+		turn: Turn,
+		allowance: ChatAllowance,
+	): Promise<TurnTools | undefined> {
+		const names = turn.judge.tools;
+		if (names.length === 0) return undefined;
+
+		const unavailable = (reason: NonNullable<ToolsPromptContext["unavailable"]>): TurnTools => ({
+			prompt: { unavailable: reason, assessments: [] },
+		});
+
+		if (!allowance.plan.limits.classroomTools) return unavailable("PLAN");
+		if (turn.model === AIExpense.CHEAP) return unavailable("CHEAP_MODEL");
+
+		try {
+			if (!(await this.classroomTools.isConnected(userId))) return unavailable("NOT_CONNECTED");
+
+			const assessments = await this.classroomTools.listConversationAssessments(
+				userId,
+				conversationId,
+			);
+			return { runtime: this.classroomTools.forUser(userId, names), prompt: { assessments } };
+		} catch (error) {
+			// The chat still answers; the model explains Classroom could not be reached.
+			this.logger.error(`[TOOLS] could not prepare Classroom tools for user=${userId}`, error);
+			return unavailable("NOT_CONNECTED");
+		}
 	}
 
 	private async retrieveContext(prompt: string, userId: string, conversationId: string) {

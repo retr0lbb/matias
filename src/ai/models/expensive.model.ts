@@ -3,6 +3,7 @@ import type { AIResponse, AIStreamChunk, AiProvider, GenerateInput } from "../ai
 import { buildPrompt } from "../constants/prompts.js";
 import { extractThoughts, toGeminiThinkingLevel, toTokenUsage } from "./gemini-response.js";
 import { mapGeminiStream } from "./gemini-stream.js";
+import { generateWithTools, streamWithTools } from "./gemini-tools.js";
 
 // Troque aqui para rodar a matriz de testes
 const MODEL = "gemini-3.8-flash";
@@ -21,6 +22,24 @@ export class ExpensiveModel implements AiProvider {
 		const startedAt = new Date();
 		const t0 = performance.now();
 		const thinkingLevel = toGeminiThinkingLevel(input.thinkingLevel);
+
+		if (input.tools) {
+			return generateWithTools(
+				this.client,
+				{
+					model: MODEL,
+					message: input.message,
+					thinkingLevel,
+					config: {
+						maxOutputTokens: 2048 * 2,
+						thinkingConfig: { thinkingLevel, includeThoughts: true },
+						systemInstruction: buildPrompt(input.prompt),
+					},
+				},
+				input.tools,
+				startedAt,
+			);
+		}
 
 		try {
 			const response = await this.client.models.generateContent({
@@ -61,6 +80,26 @@ export class ExpensiveModel implements AiProvider {
 	async *generateStream(input: GenerateInput & { signal?: AbortSignal }): AsyncGenerator<AIStreamChunk> {
 		const startedAt = new Date();
 		const thinkingLevel = toGeminiThinkingLevel(input.thinkingLevel);
+
+		if (input.tools) {
+			yield* streamWithTools(
+				this.client,
+				{
+					model: MODEL,
+					message: input.message,
+					thinkingLevel,
+					config: {
+						maxOutputTokens: 2048 * 2,
+						thinkingConfig: { thinkingLevel, includeThoughts: true },
+						abortSignal: input.signal,
+						systemInstruction: buildPrompt(input.prompt),
+					},
+				},
+				input.tools,
+				startedAt,
+			);
+			return;
+		}
 
 		const stream = await this.client.models.generateContentStream({
 			model: MODEL,

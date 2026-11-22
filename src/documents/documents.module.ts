@@ -10,6 +10,6 @@ import { PdfRendererService } from './pdf/pdf-renderer.service.js';
   imports: [ConfigModule, UsageModule],
   controllers: [AssessmentsController],
   providers: [AssessmentsService, AssessmentAiService, PdfRendererService],
-  exports: [PdfRendererService],
+  exports: [PdfRendererService, AssessmentsService],
 })
 export class DocumentsModule {}

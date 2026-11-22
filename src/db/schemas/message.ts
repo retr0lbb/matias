@@ -53,7 +53,9 @@ export type MessageMetadata = {
     latencyMs?: number,
     tokens?: MessageTokenUsage,
     thinking?: string,
-    judge?: JudgeMetadata
+    judge?: JudgeMetadata,
+    /** Tools called this turn: name, outcome and latency only (no arguments or results). */
+    tools?: { name: string, ok: boolean, latencyMs: number }[]
 }
 
 export const messagesTable = pgTable("messages", 

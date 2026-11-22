@@ -1,4 +1,5 @@
 import type { MessageTokenUsage } from "../db/schemas/message.js";
+import type { ToolCallRecord, ToolRuntime } from "../shared/tools/tool-runtime.js";
 import type { ThinkingLevelOption } from "../usage/plan-limits.js";
 import { PromptProps } from "./constants/prompts.js";
 
@@ -7,6 +8,8 @@ export type GenerateInput = {
 	prompt: PromptProps;
 	/** Already clamped to the plan's max. CHEAP ignores it (always MINIMAL). */
 	thinkingLevel: ThinkingLevelOption;
+	/** Tools the model may call this turn. CHEAP ignores them. */
+	tools?: ToolRuntime;
 };
 
 export interface AiProvider {
@@ -33,9 +36,12 @@ export type AIResponse = {
 	thinkingLevel: string;
 	output_text: string;
 	thinking_output?: string;
+	/** Tools called while answering, in order (no arguments or results). */
+	toolCalls?: ToolCallRecord[];
 };
 
 export type AIStreamChunk =
 	| { type: "text"; text: string }
 	| { type: "thinking"; text: string }
+	| { type: "tool"; name: string; status: "running" | "done" | "error" }
 	| { type: "done"; response: AIResponse };

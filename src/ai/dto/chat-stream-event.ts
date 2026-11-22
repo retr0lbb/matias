@@ -26,6 +26,8 @@ export type ChatStreamEvent =
 	  }
 	| { type: "thinking"; data: { text: string } }
 	| { type: "text"; data: { text: string } }
+	/** A Classroom tool started or finished, for a "Consultando turmas…" indicator. */
+	| { type: "tool"; data: { name: string; status: "running" | "done" | "error" } }
 	| {
 			type: "done";
 			data: {
