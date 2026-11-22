@@ -1,33 +1,58 @@
+# =============================================================================
+#  MATIAS API — manual requests (VS Code REST Client)
+# =============================================================================
+#  Sections (Ctrl+F the number):
+#    [0] Variables
+#    [1] Auth (register, login, email verification, /me)
+#    [2] Google OIDC (browser only)
+#    [3] Google Classroom connection
+#    [4] AI chat
+#    [5] RAG documents
+#    [6] Assessments (made in the chat; read/edit/render here)
+#    [7] Usage (quota)
+#    [8] Subscription
+#    [9] Asaas webhook
+#
+#  Auth legend used below:
+#    PUBLIC    no cookie needed
+#    SESSION   needs the session cookie (any signed-in user)
+#    VERIFIED  needs the cookie AND a verified email (403 email_unverified otherwise)
+#
+#  Plan errors (any route that spends quota):
+#    429 quota used up for this cycle · 413 file/storage too big · 403 plan lacks feature/thinking level
+#  Full reference: README.md
+# =============================================================================
 
+
+# -----------------------------------------------------------------------------
+# [0] Variables
+# -----------------------------------------------------------------------------
 @baseUrl = http://localhost:3000
 
-@email = sistemas@saude.matita.com.br
+@email = retr0lbb@gmail.com
 @pass = retr0lbb
 @name = Matita akinator
 
-@cookie = __Host-sid=9yF-I9yLJHj0iMYsw-bqo56nPXZJQN-GCoy8MEyDM0Y
+# Copy the __Host-sid value from the Set-Cookie header of LOGIN / REGISTER.
+@cookie = __Host-sid=eXdNMdCww6WJpQYSCzBHcKf56rLeo8HDKm7jeJJQCg8
 
-### CHAT
-POST {{baseUrl}}/ai/chat
-Content-Type: application/json
-Cookie: {{cookie}}
+# Ids reused by several requests. Paste real values here.
+@conversationId = ef0d5982-d526-4062-956c-a1db81ca7d53
+@ragDocumentId = 29329aa6-7c2f-4460-8445-246ac67a9d05
+@planId = 00000000-0000-0000-0000-000000000000
 
-{
-    "prompt": "Qual o seu nome e qual o seu proposito IA?"
-}
+# Must equal ASAAS_WEBHOOK_TOKEN in .env.
+@asaasToken = paste-ASAAS_WEBHOOK_TOKEN-here
 
-### CHAT STREAM (SSE)
-# REST Client shows the response only after the stream ends; use curl -N to watch it live.
-POST {{baseUrl}}/ai/chat/stream?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
-Content-Type: application/json
-Accept: text/event-stream
-Cookie: {{cookie}}
 
-{
-    "prompt": "Como se fosse um profissional senior me explique como o react native funciona por baixo dos panos (CHEAP MODEL)"
-}
+# =============================================================================
+# [1] AUTH
+# =============================================================================
 
-### REGISTER USER
+### [1.1] REGISTER — PUBLIC
+# Body:    { email, name, password }
+# Returns: the new user. Sets the session cookie and sends the verification email
+#          (written to the log when RESEND_API_KEY is not set).
 POST {{baseUrl}}/auth/register
 Content-Type: application/json
 
@@ -37,7 +62,10 @@ Content-Type: application/json
     "password": "{{pass}}"
 }
 
-### LOGIN
+### [1.2] LOGIN — PUBLIC
+# Body:    { email, password }
+# Returns: { mfaRequired } + Set-Cookie: __Host-sid=...  → copy it to @cookie
+# Errors:  401 wrong email or password
 # @name login
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
@@ -47,28 +75,130 @@ Content-Type: application/json
     "password": "{{pass}}"
 }
 
-### GOOGLE LOGIN
-GET http://localhost:3000/auth/oidc/google/login
-
-### GERA O LINK DE CONFIRMACAO DE EMAIL
-POST http://localhost:3000/auth/email/verify
+### [1.3] VERIFY EMAIL — PUBLIC
+# Body:    { token }  (the token from the link in the verification email)
+# Returns: { email, emailVerified: true }
+# Errors:  400 invalid or expired link
+POST {{baseUrl}}/auth/email/verify
 Content-Type: application/json
 
 {
-    "token": "EK4CNGppoX3W3uhiGNeAcvqANALEPCIudi8U8WFJKcs"
+    "token": "rcJGD_ExVpe-CGjx6SAvUxSjnxeypqEcTLvy35wPsTI"
 }
 
-### RESEND LINK
+### [1.4] RESEND VERIFICATION EMAIL — SESSION
+# Returns: 202, empty body
+# Errors:  409 email already verified
 POST {{baseUrl}}/auth/email/verification
-Cookie: __Host-sid=Io0aT-UDHySIJXiCSpFUmb0hoG9LI9a8DDwZWbr_KgU
+Cookie: {{cookie}}
 
-###
-GET http://localhost:3000/me
+### [1.5] ME — SESSION
+# Returns: the signed-in user
+GET {{baseUrl}}/me
 Cookie: {{cookie}}
 
 
-### UPLOAD ONE ITERATION OF DOCUMENT
-POST {{baseUrl}}/rag/documents?conversationId=ef0d5982-d526-4062-956c-a1db81ca7d53
+# =============================================================================
+# [2] GOOGLE OIDC — open these in the BROWSER, not here (they are redirects)
+# =============================================================================
+#
+#  Google sign-in — PUBLIC
+#    http://localhost:3000/auth/oidc/google/login?redirectTo=/me
+#    → Google → /auth/oidc/google/callback → redirects to APP_URL (or /me)
+#
+#  Connect Google Classroom — SESSION (sign in in the same browser first)
+#    http://localhost:3000/auth/oidc/google-classroom/connect?redirectTo=/settings
+#    → Google consent → /auth/oidc/google-classroom/callback
+#    Errors: 401 not signed in · 400 MISSING_SCOPES if a permission was unchecked
+#    Both callback URIs must be registered on the same Google OAuth web client.
+
+### [2.1] GOOGLE LOGIN (here it only shows the 302 Location)
+GET {{baseUrl}}/auth/oidc/google/login?redirectTo=/me
+
+
+# =============================================================================
+# [3] GOOGLE CLASSROOM CONNECTION
+# =============================================================================
+
+### [3.1] CLASSROOM STATUS — SESSION
+# Returns: { connected, email, connectedAt }
+GET {{baseUrl}}/classroom/status
+Cookie: {{cookie}}
+
+### [3.2] DISCONNECT CLASSROOM — SESSION
+# Revokes the token at Google (best effort) and deletes it locally.
+# Returns: { disconnected: boolean }
+DELETE {{baseUrl}}/classroom/connection
+Cookie: {{cookie}}
+
+
+# =============================================================================
+# [4] AI CHAT
+# =============================================================================
+#  Body:   { prompt, model?, thinkingLevel? }
+#          model:         "AUTO" (default, the judge picks) | "CHEAP" | "NORMAL" | "EXPENSIVE"
+#          thinkingLevel: "DEFAULT" (default) | "HIGH" | "ULTRA_HIGH"  (above the plan's max → 403)
+#  Query:  conversationId?  (leave it out to start a new conversation)
+#  POST /ai/chat/stream is the only chat route (the JSON POST /ai/chat was removed).
+#  Errors: 429 no messages left for the tier · 403 thinking level above the plan's
+#  Classroom tools: every tier, on plans with classroomTools: true and Classroom connected.
+
+### [4.1] CHAT STREAM (SSE), new conversation — VERIFIED
+# REST Client shows the response only after the stream ends; use curl -N to watch it live.
+# Events: start · status · thinking · text · tool (Classroom) · done · error
+POST {{baseUrl}}/ai/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Qual o seu nome e qual o seu proposito IA?"
+}
+
+### [4.2] CHAT STREAM in an existing conversation, model picked by hand — VERIFIED
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Resuma o documento que eu enviei.",
+    "model": "NORMAL",
+    "thinkingLevel": "DEFAULT"
+}
+
+### [4.3] CHAT STREAM with Classroom tools — VERIFIED
+POST {{baseUrl}}/ai/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Matias quais sao as minhas turmas? use a tool do google classroom para descobrir (EXPENSIVE MODEL)"
+}
+
+### [4.4] CHAT STREAM forcing the CHEAP model with a Classroom tool — VERIFIED
+POST {{baseUrl}}/ai/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Quantos alunos tem a minha primeira turma?",
+    "model": "CHEAP"
+}
+
+
+# =============================================================================
+# [5] RAG — DOCUMENTS (search runs inside the chat)
+# =============================================================================
+#  Files: .pdf or .docx only, and the content must match the extension.
+#  Errors: 429 no uploads left · 413 file above the plan's maxFileBytes (max 50 MB) or storage full
+
+### [5.1] UPLOAD ONE DOCUMENT — VERIFIED
+# Form field: file   ·   conversationId? in the query or as a form field
+# Returns: the document record. It is parsed and embedded in the background → poll [5.3]
+POST {{baseUrl}}/rag/documents?conversationId={{conversationId}}
 Cookie: {{cookie}}
 Content-Type: multipart/form-data; boundary=MyBoundary
 
@@ -79,65 +209,79 @@ Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 < ./prot.docx
 --MyBoundary--
 
-### Get Document upload status
-GET {{baseUrl}}/rag/documents/29329aa6-7c2f-4460-8445-246ac67a9d05
+### [5.2] UPLOAD SEVERAL DOCUMENTS — VERIFIED
+# Form field: files (1 to 10 files, 20 MB each at most)
+# Returns: one record per file · 400 when no file is sent
+POST {{baseUrl}}/rag/documents/batch?conversationId={{conversationId}}
+Cookie: {{cookie}}
+Content-Type: multipart/form-data; boundary=MyBoundary
+
+--MyBoundary
+Content-Disposition: form-data; name="files"; filename="prot.docx"
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+
+< ./prot.docx
+--MyBoundary--
+
+### [5.3] DOCUMENT STATUS — VERIFIED
+# Returns: the processing status of the document
+GET {{baseUrl}}/rag/documents/{{ragDocumentId}}
 Cookie: {{cookie}}
 
 
-### Retrieve argument
-GET {{baseUrl}}/rag/search?query=Fatecard
-Cookie: {{cookie}}
 
+# =============================================================================
+# [6] ASSESSMENTS — made in the CHAT, read/edited/rendered here — all VERIFIED
+# =============================================================================
+#  Creating, revising and redoing an assessment happens in POST /ai/chat/stream:
+#  the judge detects the request. Watch for these events:
+#    status {stage:"documenting"} → document {id, version, ...} → text (short summary)
+#  Copy the "id" from the `document` event into @assessmentId below.
+#  Costs: one chat message (NORMAL or EXPENSIVE, never CHEAP) + one document credit.
+#  Errors: no credits left → `error` event with the quota body; a failed AI → status document_failed (no credit spent).
 
-### QUTA
-GET {{baseUrl}}/usage
-Cookie: {{cookie}}
+@assessmentId = paste-the-id-from-the-document-event
 
-
-### ASSESSMENT: generate (header and theme are optional)
-# @name assessment
-POST {{baseUrl}}/documents/assessments
+### [6.1] CREATE in the chat — the first time MATIAS asks for school / teacher / subject / class
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
 Content-Type: application/json
+Accept: text/event-stream
 Cookie: {{cookie}}
 
 {
-    "prompt": "Prova de Ciências para o 6º ano sobre o sistema solar: 4 questões objetivas de 1 ponto e 2 dissertativas de 3 pontos.",
-    "header": {
-        "institutionName": "Escola Exemplo",
-        "teacherName": "Prof. Exemplo",
-        "subject": "Ciências"
-    },
-    "theme": {
-        "accentColor": "#1d4ed8"
-    }
+    "prompt": "Faz uma prova de Ciências para o 6º ano sobre o sistema solar: 4 questões objetivas de 1 ponto e 2 dissertativas de 3 pontos."
 }
 
-### ASSESSMENT: stored JSON
-@assessmentId = {{assessment.response.body.id}}
+### [6.1b] ANSWER the header question — now the assessment is generated (event: document)
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Escola Estadual Exemplo, Prof.ª Ana Souza, Ciências, turma 6º A."
+}
+
+### [6.1c] CREATE from an uploaded file (upload with [5.1] first) — runs on EXPENSIVE
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Monta uma prova de 15 questões baseada no capítulo que eu enviei, com questões no estilo ENEM."
+}
+
+### [6.2] GET (stored JSON)
 GET {{baseUrl}}/documents/assessments/{{assessmentId}}
 Cookie: {{cookie}}
 
-### ASSESSMENT: HTML preview
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/preview
-Cookie: {{cookie}}
-
-### ASSESSMENT: PDF
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
-Cookie: {{cookie}}
-
-### ASSESSMENT: DOCX
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/docx
-Cookie: {{cookie}}
-
-### ASSESSMENT: answer key PDF
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
-Cookie: {{cookie}}
-
-### ASSESSMENT: answer key HTML preview
-GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
-Cookie: {{cookie}}
-
-### ASSESSMENT: manual patch (no AI). "version" is the one from the last response; ids come from the stored JSON
+### [6.3] MANUAL PATCH — no AI, no credit
+# Body: { version, ops: [...] }
+# Ops:  set_title · set_instructions · update_section · insert_section · remove_section
+#       replace_question · insert_question · remove_question · move_question
+#       update_theme · update_header_fields
+# Section and question ids come from the stored JSON in [6.2].
 PATCH {{baseUrl}}/documents/assessments/{{assessmentId}}
 Content-Type: application/json
 Cookie: {{cookie}}
@@ -151,23 +295,127 @@ Cookie: {{cookie}}
     ]
 }
 
-### ASSESSMENT: AI revision (the AI returns a patch)
-POST {{baseUrl}}/documents/assessments/{{assessmentId}}/revise
+### [6.4] AI REVISION in the chat — counts against aiChangesPerDocument; event: document (version + 1)
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Adicione mais uma questão objetiva de 1 ponto sobre a Lua no final da primeira seção."
+}
+
+### [6.5] REGENERATE in the chat — new content, keeps header and theme; same limit as [6.4]
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Refaz essa prova do zero, mais difícil."
+}
+
+### [6.5b] CHEAP picked by hand — the turn is raised to NORMAL (status generating: upgradedFrom "CHEAP")
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Faz uma lista curta de 5 exercícios de frações.",
+    "model": "CHEAP"
+}
+
+### [6.5c] CREATE and post to Classroom in one turn — events: document, then tool
+POST {{baseUrl}}/ai/chat/stream?conversationId={{conversationId}}
+Content-Type: application/json
+Accept: text/event-stream
+Cookie: {{cookie}}
+
+{
+    "prompt": "Faz uma prova curta de frações e posta como tarefa na minha turma de matemática."
+}
+
+### [6.6] HTML PREVIEW (for a sandboxed iframe, strict CSP)
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/preview
+Cookie: {{cookie}}
+
+### [6.7] PDF download
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/pdf
+Cookie: {{cookie}}
+
+### [6.8] DOCX download
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/docx
+Cookie: {{cookie}}
+
+### [6.9] ANSWER KEY PDF download
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key
+Cookie: {{cookie}}
+
+### [6.10] ANSWER KEY HTML preview
+GET {{baseUrl}}/documents/assessments/{{assessmentId}}/answer-key/preview
+Cookie: {{cookie}}
+
+
+# =============================================================================
+# [7] USAGE
+# =============================================================================
+
+### [7.1] USAGE / QUOTA — SESSION
+# Returns: the plan, its limits and what was used this cycle
+GET {{baseUrl}}/usage
+Cookie: {{cookie}}
+
+
+# =============================================================================
+# [8] SUBSCRIPTION
+# =============================================================================
+
+### [8.1] LIST PLANS — PUBLIC
+# Returns: the plans you can subscribe to → copy an id to @planId
+GET {{baseUrl}}/subscription/plans
+
+### [8.2] SUBSCRIBE — VERIFIED
+# Body:   { planId (uuid), paymentMethod: "PIX" | "CREDIT_CARD", fullName (≥ 3 chars), cpf, discountCode? }
+#         cpf: 000.000.000-00 or 00000000000
+# Returns: the subscription, created on Asaas
+# Errors: 409 a pending or active subscription already exists · 400 invalid plan or promo code
+POST {{baseUrl}}/subscription
 Content-Type: application/json
 Cookie: {{cookie}}
 
 {
-    "version": 2,
-    "instruction": "Adicione mais uma questão objetiva de 1 ponto sobre a Lua no final da primeira seção."
+    "planId": "{{planId}}",
+    "paymentMethod": "PIX",
+    "fullName": "{{name}}",
+    "cpf": "123.456.789-09"
 }
 
-### ASSESSMENT: regenerate the content (keeps header and theme; "prompt" is optional)
-POST {{baseUrl}}/documents/assessments/{{assessmentId}}/regenerate
+
+# =============================================================================
+# [9] ASAAS WEBHOOK — called by Asaas, not by the frontend
+# =============================================================================
+#  PUBLIC, but checked by token: header asaas-access-token must equal ASAAS_WEBHOOK_TOKEN (401 otherwise).
+#  Always answers 200 { received: true } for a valid token, even for events it ignores.
+#  Events: PAYMENT_CONFIRMED / PAYMENT_RECEIVED → activates or reactivates
+#          PAYMENT_OVERDUE → past due
+#          PAYMENT_REFUNDED, PAYMENT_CHARGEBACK_REQUESTED, SUBSCRIPTION_INACTIVATED, SUBSCRIPTION_DELETED → ends
+#  payment.externalReference = our subscription id; payment.subscription = the Asaas id (sub_...)
+#  For real Asaas calls locally: npm run start:ngrok
+
+### [9.1] SIMULATE A PAID CHARGE
+POST {{baseUrl}}/webhooks/asaas
 Content-Type: application/json
-Cookie: {{cookie}}
+asaas-access-token: {{asaasToken}}
 
 {
-    "version": 3
+    "event": "PAYMENT_RECEIVED",
+    "payment": {
+        "id": "pay_test_123",
+        "subscription": "sub_test_123",
+        "externalReference": "00000000-0000-0000-0000-000000000000",
+        "billingType": "PIX",
+        "value": 29.9,
+        "dueDate": "2026-11-22"
+    }
 }
-
-# http://localhost:3000/auth/oidc/google/login?redirectTo=/me

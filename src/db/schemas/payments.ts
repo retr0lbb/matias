@@ -25,6 +25,6 @@ export const paymentTables = pgTable("payments", {
 	paidAt: timestamp("paid_at"), // null until the charge is paid
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
-
+export type Payment = typeof paymentTables.$inferSelect;
 export type PaymentStatus = (typeof paymentStatusEnum.enumValues)[number];
 export type BillingType = (typeof billingTypeEnum.enumValues)[number];

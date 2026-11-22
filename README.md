@@ -1,121 +1,200 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# MATIAS
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+MATIAS is a NestJS API that helps teachers with AI. It offers:
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+- a chat backed by Gemini
+- search over documents the teacher uploads (RAG)
+- assessments (exams and worksheets) the AI generates and the teacher can edit
+- paid plans with per-cycle limits, billed through Asaas
+- Google Classroom tools inside the chat
 
-## Description
+## Stack
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+| Part      | What it uses                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| Framework | NestJS 12 (ESM) with Express                                                                     |
+| Database  | PostgreSQL 16 with pgvector, through Drizzle ORM (`drizzle/` holds the migrations)               |
+| Auth      | `@nestjs/authentication`: session cookie, email and password, Google OIDC, email verification    |
+| AI        | Gemini (`@google/genai`), for chat, embeddings and documents                                     |
+| Documents | Generated from the chat as validated JSON; `pdf-parse` and `mammoth` read uploads; Playwright renders PDFs; `docx` builds Word files |
+| Payments  | Asaas (PIX and credit card), with webhooks and two reconciliation cron jobs                      |
+| Email     | `@nestjs/mail`, sent through Resend, or written to the log when `RESEND_API_KEY` is not set      |
+| Tests     | Vitest; see [`AGENTS.md`](AGENTS.md) and [`specs/TEST.md`](specs/TEST.md)                        |
 
-## Project setup
+## Getting started
 
 ```bash
-$ pnpm install
+pnpm install
+docker compose up -d          # Postgres + pgvector on localhost:5432 (user/password: docker, db: matias)
+pnpm run db:migrate           # apply the Drizzle migrations
+pnpm run start:dev            # http://localhost:3000
 ```
 
-## Compile and run the project
+### Environment variables
 
-```bash
-# development
-$ pnpm run start
+| Variable                       | Required | What it is for                                                                                                                         |
+| ------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                 | yes      | Postgres connection string                                                                                                             |
+| `GEMINI_API_KEY`               | yes      | Gemini (chat, embeddings, documents)                                                                                                   |
+| `GOOGLE_CLIENT_ID`             | yes      | Google OAuth web client, shared by sign-in and Classroom                                                                               |
+| `GOOGLE_CLIENT_SECRET`         | yes      | Secret of that same client                                                                                                             |
+| `GOOGLE_REDIRECT_URL`          | yes      | OIDC callback, e.g. `http://localhost:3000/auth/oidc/:provider/callback`. A value ending in `/google/callback` is converted automatically |
+| `GOOGLE_TOKEN_ENC_KEY`         | yes      | Encrypts stored Classroom tokens (`openssl rand -base64 32`). It stays on the server and is never sent to Google                     |
+| `ASAAS_API_KEY`                | yes      | Asaas API key                                                                                                                          |
+| `ASAAS_API_URL`                | no       | Asaas base URL (sandbox or production)                                                                                                 |
+| `ASAAS_WEBHOOK_TOKEN`          | yes\*    | Must match the `asaas-access-token` header Asaas sends. \*Every webhook is refused without it                                         |
+| `APP_URL`                      | no       | Frontend URL to return to after Google sign-in (defaults to `/me`)                                                                     |
+| `EMAIL_FRONTEND_URL_REDIRECT`  | yes      | Frontend base URL for verification links (`<url>/verify-email`)                                                                        |
+| `EMAIL_DOMAIN`                 | yes      | Sender address (`Contato <EMAIL_DOMAIN>`)                                                                                              |
+| `RESEND_API_KEY`               | no       | Sends real email. Without it, emails are only written to the log                                                                       |
+| `EMBEDDING_TOKENS_PER_MINUTE`  | no       | Rate limit for embedding calls                                                                                                         |
+| `PORT`                         | no       | HTTP port (default `3000`)                                                                                                             |
 
-# watch mode
-$ pnpm run start:dev
+### Scripts
 
-# production mode
-$ pnpm run start:prod
-```
+| Script                                            | What it does                                         |
+| ------------------------------------------------- | ---------------------------------------------------- |
+| `start` / `start:dev` / `start:debug` / `start:prod` | Run the API                                       |
+| `test` / `test:watch` / `test:cov` / `test:e2e`   | Vitest                                               |
+| `lint`                                            | oxlint (type-aware)                                  |
+| `db:generate` / `db:migrate` / `db:studio`        | Drizzle Kit                                          |
+| `start:ngrok`                                     | Public tunnel, used to receive Asaas webhooks locally |
 
-## Run tests
+## Authentication model
 
-```bash
-# unit tests
-$ pnpm run test
+The authentication guard is **global**: every route needs a signed-in session unless it is marked **Public** below. The session is a cookie, set by `/auth/login`, `/auth/register` or the Google callback. Sessions last at most 14 days and expire after 4 days without use.
 
-# e2e tests
-$ pnpm run test:e2e
+The **Auth** column in the tables below uses these values:
 
-# test coverage
-$ pnpm run test:cov
-```
+- **Public**: no session needed.
+- **Session**: any signed-in user.
+- **Verified**: a signed-in user whose email is verified. Otherwise the answer is `403`.
 
-## Deployment
+On top of auth, many routes check the user's **plan** (`plans.limits`, see [`specs/plan-limits-model-selection.md`](specs/plan-limits-model-selection.md)). The plan errors are:
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+- `429`: the quota for the cycle is used up (`QuotaExceededException`).
+- `413`: the file is too big for the plan, or storage is full.
+- `403`: the plan does not include the feature or the thinking level (`PlanRestrictionException`).
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Endpoints
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
+### Auth: `/auth`, `/me`
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+| Method | Path                                    | Auth    | Requires                                                         | Returns / notes                                                                                     |
+| ------ | --------------------------------------- | ------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| POST   | `/auth/register`                        | Public  | Body `{ email, name, password }`                                 | The new user. Signs them in (sets the cookie) and sends the verification email                      |
+| POST   | `/auth/login`                           | Public  | Body `{ email, password }`                                       | `{ mfaRequired }` and sets the session cookie. Wrong credentials give `401`                         |
+| POST   | `/auth/email/verify`                    | Public  | Body `{ token }` (from the email link)                           | `{ email, emailVerified: true }`. An invalid or expired token gives `400`                           |
+| POST   | `/auth/email/verification`              | Session | —                                                                | `202`, and resends the verification email. Gives `409` if the email is already verified             |
+| GET    | `/me`                                   | Session | —                                                                | The signed-in user                                                                                  |
+| GET    | `/auth/oidc/google/login`               | Public  | Query `redirectTo?`                                              | Redirects to Google sign-in                                                                         |
+| GET    | `/auth/oidc/google/callback`            | Public  | Google's query params                                            | Signs the user in, then redirects to `APP_URL`                                                      |
+| GET    | `/auth/oidc/google-classroom/connect`   | Session | Query `redirectTo?`. Must start from the same site               | Redirects to Google to grant Classroom access (link only, it never signs anyone in)                 |
+| GET    | `/auth/oidc/google-classroom/callback`  | Session | Google's query params                                            | Stores the encrypted tokens. Gives `400 MISSING_SCOPES` if a permission was unchecked               |
 
-## Observability
+### AI chat: `/ai/chat`
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+| Method | Path              | Auth     | Requires                                                                                                                                           | Returns / notes                                                       |
+| ------ | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| POST   | `/ai/chat/stream` | Verified | Body `{ prompt, model?: "AUTO" \| "CHEAP" \| "NORMAL" \| "EXPENSIVE", thinkingLevel?: "DEFAULT" \| "HIGH" \| "ULTRA_HIGH" }`. Query `conversationId?` | Server-Sent Events (see below). Without `conversationId`, a new conversation is started. This is the only chat route |
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+Plan checks: messages per cycle for each model tier (`429`), and `thinkingLevel` up to the plan's `maxThinkingLevel` (`403`). With `AUTO`, a judge model picks the tier, and moves down a tier when the chosen one has no quota left.
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+**Documents are made in the chat.** The judge also reads each message for a document request: create, revise or redo one of the conversation's documents. Only the `assessment` type exists today. When it finds one, this happens:
 
-This project is already instrumented. Create a free account at [observe.nestjs.com](https://observe.nestjs.com), add an application, and paste the generated app key and secret into the `ObserveModule.forRoot()` call in `src/app.module.ts`.
+1. **Header details:** for a new document whose school, teacher, subject or class the teacher hasn't given yet, MATIAS first asks for them. It asks once per conversation, and the teacher may skip.
+2. **Model tier:** documents never run on CHEAP. A short or simple document uses NORMAL, and a long one, one built from uploaded files or one with entrance-exam questions uses EXPENSIVE. This applies over a manual pick too (`upgradedFrom` in the `generating` status), and a full tier moves up, never down to CHEAP.
+3. **Context:** the document AI gets the message, the conversation and up to 10 excerpts from the files uploaded to the conversation. The header text is taken from what the teacher wrote.
+4. **What it costs:** one chat message for the tier it ran on, plus a document credit, with the same rules as before (each credit includes `aiChangesPerDocument` AI changes).
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+A failed document spends no credit, and the answer explains what went wrong. A document made in a turn can be posted to Classroom in that same turn. See [`specs/document-generation-in-chat.md`](specs/document-generation-in-chat.md).
 
-## Resources
+Stream events (`event: <type>`, defined in `src/ai/dto/chat-stream-event.ts`):
 
-Check out a few resources that may come in handy when working with NestJS:
+| Event      | Data                                                                                         |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `start`    | `{ conversationId, title }`                                                                  |
+| `status`   | `{ stage: "classifying" \| "retrieving" }`; `{ stage: "documenting" \| "document_failed", action, documentType }`; or `{ stage: "generating", model, selection, thinkingLevel, downgradedFrom?, upgradedFrom? }` |
+| `document` | `{ id, documentType, action: "CREATE" \| "REVISE" \| "REGENERATE", title, version }`: a document was saved this turn. Load it from `/documents/assessments/:id` |
+| `thinking` | `{ text }`                                                                                   |
+| `text`     | `{ text }`, a chunk of the answer                                                            |
+| `tool`     | `{ name, status: "running" \| "done" \| "error" }`, for Classroom tools                      |
+| `done`     | `{ messageId, finishReason, usage }`                                                         |
+| `error`    | A quota error body, or `{ code: "GENERATION_FAILED", message }`                              |
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+Errors found before the stream starts (auth, validation, plan) come back as normal HTTP status codes.
 
-## Support
+### RAG documents: `/rag/documents`
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+| Method | Path                  | Auth     | Requires                                                                                           | Returns / notes                                                      |
+| ------ | --------------------- | -------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| POST   | `/rag/documents`      | Verified | `multipart/form-data` with field `file` (`.pdf` or `.docx`). `conversationId?` in the query or body | The document record. It is processed (parsed and embedded) in the background |
+| POST   | `/rag/documents/batch`| Verified | `multipart/form-data` with field `files` (1 to 10 files, 20 MB each at most). `conversationId?`      | One record per file. Gives `400` when no file is sent                |
+| GET    | `/rag/documents/:id`  | Verified | Path `id`                                                                                          | The processing status of the document                                |
 
-## Stay in touch
+Searching happens inside the chat (`POST /ai/chat/stream` with a `conversationId`); there is no search route. Plan checks: uploads per cycle (`429`), the plan's `maxFileBytes` (`413`, with a hard cap of 50 MB) and total storage (`413`). The file's real content is checked against its extension. See [`specs/rag-vector-database.md`](specs/rag-vector-database.md).
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### Assessments: `/documents/assessments`
 
-## License
+All routes need **Verified**. `:id` must be a UUID. These routes read, edit by hand and render; **creating and changing with AI happens only in the chat** (see above). A manual `PATCH` sends back the `version` the client last saw, and a stale `version` gives `409`.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+| Method | Path                                         | Requires                                                                                    | Returns / notes                                                                 |
+| ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| GET    | `/documents/assessments/:id`                 | —                                                                                           | The assessment                                                                  |
+| PATCH  | `/documents/assessments/:id`                 | Body `{ version, ops: [...] }`                                                              | Manual edits with no AI and no credit. The ops are listed below                 |
+| GET    | `/documents/assessments/:id/preview`         | —                                                                                           | HTML for a sandboxed iframe (strict CSP, `no-store`)                            |
+| GET    | `/documents/assessments/:id/pdf`             | —                                                                                           | PDF download                                                                    |
+| GET    | `/documents/assessments/:id/docx`            | —                                                                                           | Word download                                                                   |
+| GET    | `/documents/assessments/:id/answer-key`      | —                                                                                           | Answer key as a PDF download                                                    |
+| GET    | `/documents/assessments/:id/answer-key/preview` | —                                                                                        | Answer key as HTML for the iframe                                               |
+
+Patch ops: `set_title`, `set_instructions`, `update_section`, `insert_section`, `remove_section`, `replace_question`, `insert_question`, `remove_question`, `move_question`, `update_theme` and `update_header_fields`.
+
+Plan checks, applied in the chat: documents per cycle (sent as an `error` event with the quota body; `0` turns the feature off), AI changes per document, and the thinking level. See [`specs/document-generation-in-chat.md`](specs/document-generation-in-chat.md), [`specs/document-generation.md`](specs/document-generation.md), [`specs/document-blocks.md`](specs/document-blocks.md) and [`specs/document-credits.md`](specs/document-credits.md).
+
+### Usage: `/usage`
+
+| Method | Path     | Auth    | Requires | Returns                                                       |
+| ------ | -------- | ------- | -------- | ------------------------------------------------------------- |
+| GET    | `/usage` | Session | —        | The user's plan, its limits and what has been used this cycle |
+
+### Subscriptions and payments: `/subscription`, `/webhooks/asaas`
+
+| Method | Path                  | Auth                    | Requires                                                                                                                | Returns / notes                                                                                                |
+| ------ | --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| GET    | `/subscription/plans` | Public                  | —                                                                                                                       | The plans you can subscribe to                                                                                 |
+| POST   | `/subscription`       | Verified                | Body `{ planId (uuid), paymentMethod: "PIX" \| "CREDIT_CARD", fullName (≥ 3 chars), cpf, discountCode? }`                | Creates the subscription on Asaas. Gives `409` if the user already has a pending or active one, and `400` for an invalid plan or promo code |
+| POST   | `/webhooks/asaas`     | Public, checked by token | Header `asaas-access-token` equal to `ASAAS_WEBHOOK_TOKEN`                                                             | Always `200 { received: true }` for a valid token, and `401` without one. It activates, marks past due or ends the subscription, and records the payment |
+
+Two cron jobs run in the São Paulo time zone:
+
+- **Count Olaf** (every 30 minutes): syncs subscriptions and charges with Asaas, for the times a webhook never arrived.
+- **Mr. Beliarge** (03:00 daily): ends subscriptions whose overdue charge is past the grace period.
+
+See [`specs/payment-subscription-overview.md`](specs/payment-subscription-overview.md), [`specs/payment-asaas.md`](specs/payment-asaas.md) and [`specs/promo-code-discount.md`](specs/promo-code-discount.md).
+
+### Google Classroom: `/classroom`
+
+| Method | Path                    | Auth    | Requires | Returns / notes                                                                 |
+| ------ | ----------------------- | ------- | -------- | ------------------------------------------------------------------------------- |
+| GET    | `/classroom/status`     | Session | —        | `{ connected, email, connectedAt }`                                             |
+| DELETE | `/classroom/connection` | Session | —        | `{ disconnected }`. Revokes the token at Google (best effort) and deletes it locally |
+
+You connect with `GET /auth/oidc/google-classroom/connect` (listed under Auth). After that, the chat can list classes, students and coursework, and create **draft** assignments with an assessment attached as a PDF. This only works on plans with `classroomTools: true` (on any model tier). See [`specs/google-classroom.md`](specs/google-classroom.md).
+
+## Specs
+
+Each feature is described in more detail in `specs/`:
+
+- `auth-storage.md`
+- `stream-generation.md`
+- `message-metadata.md`
+- `plan-limits-model-selection.md`
+- `rag-vector-database.md`
+- `document-generation.md`, `document-blocks.md` and `document-credits.md`
+- `payment-subscription-overview.md`, `payment-asaas.md` and `promo-code-discount.md`
+- `google-classroom.md`
+- `TEST.md`
 
 # TODO
 

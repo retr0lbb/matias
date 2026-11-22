@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -9,7 +8,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectDrizzle } from '@nestjs/drizzle';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
   type Assessment,
@@ -23,7 +22,11 @@ import {
   UsageService,
   type UsageSubject,
 } from '../usage/usage.service.js';
-import { AssessmentAiService } from './ai/document-ai.service.js';
+import {
+  AssessmentAiService,
+  type DocumentAiOptions,
+  type DocumentAiUsage,
+} from './ai/document-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
 import { applyPatch } from './patch/apply-patch.js';
 import { PdfRendererService } from './pdf/pdf-renderer.service.js';
@@ -35,35 +38,37 @@ import {
   type AssessmentDocument,
   assessmentDocumentSchema,
 } from './schemas/document.schema.js';
-import type { AssessmentHeader } from './schemas/header.schema.js';
 import type { AssessmentPatch } from './schemas/patch.schema.js';
-import type { AssessmentTheme } from './schemas/theme.schema.js';
 
-export interface GenerateAssessmentInput {
-  prompt: string;
-  conversationId?: string;
-  header?: AssessmentHeader;
-  theme?: AssessmentTheme;
-  /** Must be within the plan's max thinking level (403 otherwise). */
-  thinkingLevel: ThinkingLevelOption;
+/**
+ * AI work on documents comes only from the chat (AiService): the turn picks
+ * the model, and `request` is the teacher's message with the conversation and
+ * file context already added.
+ */
+interface ChatDocumentInput extends DocumentAiOptions {
+  /** What the AI receives. */
+  request: string;
 }
+
+export interface GenerateAssessmentInput extends ChatDocumentInput {
+  /** The teacher's own message, stored so a later regenerate can reuse it. */
+  prompt: string;
+  conversationId: string;
+}
+
+export type ReviseAssessmentInput = ChatDocumentInput;
+
+export type RegenerateAssessmentInput = ChatDocumentInput;
 
 export interface PatchAssessmentInput {
   version: number;
   ops: AssessmentPatch;
 }
 
-export interface ReviseAssessmentInput {
-  version: number;
-  instruction: string;
-  thinkingLevel: ThinkingLevelOption;
-}
-
-export interface RegenerateAssessmentInput {
-  version: number;
-  /** Falls back to the request the assessment was last generated from. */
-  prompt?: string;
-  thinkingLevel: ThinkingLevelOption;
+/** The saved document plus what the AI spent on it. */
+export interface AiAssessmentResult {
+  view: AssessmentView;
+  usage: DocumentAiUsage;
 }
 
 export interface AssessmentView {
@@ -118,23 +123,21 @@ export class AssessmentsService {
   async generate(
     user: UsageSubject,
     input: GenerateAssessmentInput,
-  ): Promise<AssessmentView> {
+  ): Promise<AiAssessmentResult> {
     await this.assertConversationAccess(user.id, input.conversationId);
     // Fail before paying for the AI call; checked again under lock on insert.
     const allowance = await this.usageService.getDocumentAllowance(this.db, user);
     this.usageService.assertThinkingLevelAllowed(allowance, input.thinkingLevel);
     this.usageService.assertCanSpendDocumentCredit(allowance, 'GENERATE');
 
-    const generated = await this.assessmentAi.generate(
-      input.prompt,
-      input.thinkingLevel,
-    );
+    const generated = await this.assessmentAi.generate(input.request, input);
 
+    // The header text comes from what the teacher said in the chat; the theme starts at the defaults.
     const document = assessmentDocumentSchema.parse({
       schemaVersion: ASSESSMENT_SCHEMA_VERSION,
-      content: assignIds(generated),
-      header: input.header ?? {},
-      theme: input.theme ?? {},
+      content: assignIds(generated.content),
+      header: generated.header,
+      theme: {},
     });
 
     const row = await this.db.transaction(async (tx) => {
@@ -148,7 +151,7 @@ export class AssessmentsService {
         .insert(assessmentsTable)
         .values({
           userId: user.id,
-          conversationId: input.conversationId ?? null,
+          conversationId: input.conversationId,
           document,
           prompt: input.prompt,
         })
@@ -163,7 +166,36 @@ export class AssessmentsService {
       return inserted;
     });
 
-    return this.toView(row, document);
+    return { view: this.toView(row, document), usage: generated.usage };
+  }
+
+  /** Id, title and creation time of the conversation's assessments, newest first. */
+  async listByConversation(
+    userId: string,
+    conversationId: string,
+    limit: number,
+  ): Promise<{ id: string; title: string; createdAt: Date }[]> {
+    const rows = await this.db
+      .select({
+        id: assessmentsTable.id,
+        document: assessmentsTable.document,
+        createdAt: assessmentsTable.createdAt,
+      })
+      .from(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.userId, userId),
+          eq(assessmentsTable.conversationId, conversationId),
+        ),
+      )
+      .orderBy(desc(assessmentsTable.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.document?.content?.title ?? 'Sem título',
+      createdAt: row.createdAt,
+    }));
   }
 
   async get(id: string, userId: string): Promise<AssessmentView> {
@@ -222,49 +254,46 @@ export class AssessmentsService {
     return this.toView(row, result.document);
   }
 
-  /** The AI turns the instruction into a patch; same engine as `patch`. */
+  /**
+   * The AI turns the request into a patch; same engine as `patch`. Works on
+   * the latest version; a change saved meanwhile is answered with 409.
+   */
   async revise(
     id: string,
     user: UsageSubject,
     input: ReviseAssessmentInput,
-  ): Promise<AssessmentView> {
+  ): Promise<AiAssessmentResult> {
     const current = await this.get(id, user.id);
-    this.assertVersion(current, input.version);
     await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
-    const document = await this.assessmentAi.revise(
-      current.document,
-      input.instruction,
-      input.thinkingLevel,
-    );
+    const revised = await this.assessmentAi.revise(current.document, input.request, input);
+    const view = await this.saveAiRevision(current, user, { document: revised.document });
 
-    return this.saveAiRevision(current, user, { document });
+    return { view, usage: revised.usage };
   }
 
-  /** New content from the prompt; header and theme are kept. */
+  /**
+   * New content from the request; the theme and the teacher's header are
+   * kept, and header text the AI found only fills fields that are empty.
+   */
   async regenerate(
     id: string,
     user: UsageSubject,
     input: RegenerateAssessmentInput,
-  ): Promise<AssessmentView> {
+  ): Promise<AiAssessmentResult> {
     const current = await this.get(id, user.id);
-    this.assertVersion(current, input.version);
-
-    const prompt = input.prompt ?? current.prompt;
-    if (!prompt) {
-      throw new BadRequestException('A prompt is required');
-    }
-
     await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
-    const generated = await this.assessmentAi.generate(prompt, input.thinkingLevel);
+    const generated = await this.assessmentAi.generate(input.request, input);
 
     const document = assessmentDocumentSchema.parse({
       ...current.document,
-      content: assignIds(generated),
+      header: { ...generated.header, ...current.document.header },
+      content: assignIds(generated.content),
     });
+    const view = await this.saveAiRevision(current, user, { document });
 
-    return this.saveAiRevision(current, user, { document, prompt });
+    return { view, usage: generated.usage };
   }
 
   async renderPreview(id: string, userId: string): Promise<string> {

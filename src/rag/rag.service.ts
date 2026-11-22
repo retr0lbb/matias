@@ -29,6 +29,8 @@ export interface RagSearchResult {
 export interface RagSearchOptions {
   documentId?: string;
   conversationId?: string;
+  /** How many chunks to return (default 5). Document generation asks for more. */
+  limit?: number;
 }
 
 @Injectable()
@@ -145,7 +147,7 @@ export class RagService {
         ),
       )
       .orderBy(asc(distance))
-      .limit(SEARCH_LIMIT);
+      .limit(options.limit ?? SEARCH_LIMIT);
 
     return rows.map((row) => ({
       chunkId: row.chunkId,

@@ -1,5 +1,7 @@
 # Plan limits from DB + model / thinking-level selection
 
+> **Update (2026-11-22):** `POST /ai/chat`, `AiService.chat()` and every model's `generate()` were removed. `POST /ai/chat/stream` is now the only chat route, and models only implement `generateStream()`. Passages below about the non-streaming path are history.
+
 ## Context
 
 Limits are hard-coded in `PLAN_LIMITS` (`src/usage/plans.ts`) and picked by `users.plan` (FREE/PRO enum).

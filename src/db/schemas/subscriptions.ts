@@ -33,3 +33,5 @@ export const subscriptionTable = pgTable(
 			.where(sql`${table.status} in ('PENDING', 'ACTIVE', 'EXPIRED')`), //not inactive ones mate these can be recambobulated
 	],
 );
+
+export type Subscription = typeof subscriptionTable.$inferSelect;

@@ -107,9 +107,7 @@ export class DrizzleAuthStore implements SessionStore, OidcStateStore, EmailToke
 		await this.db
 			.update(authSessionsTable)
 			.set({ lastActiveAt })
-			.where(
-				and(eq(authSessionsTable.id, id), lt(authSessionsTable.lastActiveAt, lastActiveAt)),
-			);
+			.where(and(eq(authSessionsTable.id, id), lt(authSessionsTable.lastActiveAt, lastActiveAt)));
 	}
 
 	async deleteSession(id: string): Promise<boolean> {

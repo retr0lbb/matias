@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
 import type { MockInstance } from 'vitest';
+import { GeminiClient } from '../ai/gemini.client.js';
 import { multiSectionAssessment } from './__fixtures__/assessments.js';
 import { AssessmentAiService } from './ai/document-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
@@ -29,6 +30,8 @@ import { themeSchema } from './schemas/theme.schema.js';
 // → valid patch → invalid patch rejected. No database, no HTTP.
 // Every output is written to .tmp/assessment-flow to be checked by eye.
 const OUTPUT_DIR = join(process.cwd(), '.tmp', 'assessment-flow');
+
+const AI_OPTIONS = { model: 'gemini-test', thinkingLevel: 'DEFAULT' } as const;
 
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
 
@@ -80,7 +83,7 @@ describe('Assessment flow (fake AI, real Chromium)', () => {
 
   /** Same steps as AssessmentsService.generate, minus the database. */
   async function generateDocument(): Promise<AssessmentDocument> {
-    const content = assignIds(await ai.generate('Prova de matemática', 'DEFAULT'));
+    const content = assignIds((await ai.generate('Prova de matemática', AI_OPTIONS)).content);
 
     return assessmentDocumentSchema.parse({
       schemaVersion: ASSESSMENT_SCHEMA_VERSION,
@@ -98,7 +101,7 @@ describe('Assessment flow (fake AI, real Chromium)', () => {
     await mkdir(OUTPUT_DIR, { recursive: true });
     pdfRenderer = new PdfRendererService();
     ai = new AssessmentAiService(
-      new ConfigService({ GEMINI_API_KEY: 'test-key' }),
+      new GeminiClient(new ConfigService({ GEMINI_API_KEY: 'test-key' })),
     );
     // The client is private; only its network call is replaced.
     const { client } = ai as unknown as { client: GoogleGenAI };
@@ -227,7 +230,11 @@ describe('Assessment flow (fake AI, real Chromium)', () => {
     ];
     generateContent.mockResolvedValueOnce(aiAnswer({ ops }));
 
-    const revised = await ai.revise(document, 'Troque o hexágono por um octógono', 'DEFAULT');
+    const { document: revised } = await ai.revise(
+      document,
+      'Troque o hexágono por um octógono',
+      AI_OPTIONS,
+    );
     const html = renderAssessmentHtml(revised.content, revised.header, revised.theme);
     const pdf = await pdfRenderer.render(html);
     const docx = await renderAssessmentDocx(revised.content, revised.header, revised.theme);
@@ -290,7 +297,7 @@ describe('Assessment flow (fake AI, real Chromium)', () => {
     );
 
     await expect(
-      ai.revise(document, 'Remova a seção inexistente', 'DEFAULT'),
+      ai.revise(document, 'Remova a seção inexistente', AI_OPTIONS),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
 
     expect(generateContent).toHaveBeenCalledTimes(2);

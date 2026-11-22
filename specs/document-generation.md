@@ -259,7 +259,8 @@ Nenhuma lib de teste nova: `pdf-parse` e `mammoth` já estão instalados. Nenhum
 ### Estado
 
 - **Feitas:** Fases 0 a 6 (Fase 5 DOCX e Fase 6 fluxo e2e em 21/11/2026).
-- **Próximo trabalho:** generalização para blocos e tipos de documento, descrita em [`document-blocks.md`](document-blocks.md). Ela renomeia rotas, tabela, campos do JSON e operações de patch citados neste arquivo.
+- **Próximo trabalho:** generalização para blocos e tipos de documento, descrita em [`document-blocks.md`](document-blocks.md).
+- **Plano novo (22/11/2026):** gerar e revisar documentos pelo chat (`POST /ai/chat/stream`), com o juiz classificando o tipo e o contexto da conversa (histórico, RAG, documento atual). Ver [`document-generation-in-chat.md`](document-generation-in-chat.md). Ela renomeia rotas, tabela, campos do JSON e operações de patch citados neste arquivo.
 
 ### Mudanças em relação ao plano
 

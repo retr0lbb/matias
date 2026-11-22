@@ -34,6 +34,8 @@ export const planLimitsSchema = z.object({
 	 * next change after each block spends one more credit. `null` = unlimited.
 	 */
 	aiChangesPerDocument: z.number().int().positive().nullable(),
+	/** Google Classroom tools in the chat. Missing on older rows, so it defaults to off. */
+	classroomTools: z.boolean().default(false),
 });
 
 export type PlanLimits = z.infer<typeof planLimitsSchema>;
