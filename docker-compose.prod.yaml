@@ -1,0 +1,27 @@
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: educacional_postgres
+    environment:
+      POSTGRES_USER: docker
+      POSTGRES_PASSWORD: docker
+      POSTGRES_DB: matias
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    image: matias:latest
+    pull_policy: never
+    container_name: matias_backend
+    env_file:
+      - .env.prod
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:
