@@ -50,7 +50,6 @@ export class AsaasWebhookController {
 	@Post("")
 	@HttpCode(200)
 	async handle(@Headers() headers: any | undefined, @Body() body: unknown) {
-		this.logger.log(headers);
 		if (!this.paymentService.isValidWebhookToken(headers["asaas-access-token"])) {
 			throw new UnauthorizedException("BLOCKED FROM ASAAS");
 		}
