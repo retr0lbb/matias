@@ -38,7 +38,7 @@ function oidcCallbackUrl(configured: string): string {
 		ScheduleModule.forRoot(),
 		MailModule.forRootAsync({
 			useFactory: () => ({
-				transport: process.env.RESEND_API_KEY
+				transport: !process.env.RESEND_API_KEY //test only remove afterwards
 					? new ResendTransport({ apiKey: process.env.RESEND_API_KEY!, timeout: 10_000 })
 					: new LogMailTransport(),
 				templates: new FileTemplateEngine({ dir: join(import.meta.dirname, "mail/templates") }),

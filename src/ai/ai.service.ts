@@ -3,13 +3,15 @@ import {
 	ForbiddenException,
 	Injectable,
 	Logger,
+	NotFoundException,
 	UnauthorizedException,
 } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { ClassroomToolsService } from "../classroom/classroom-tools.service.js";
 import { conversationsTable } from "../db/schemas/conversation.js";
+import { assessmentsTable } from "../db/schemas/document.js";
 import {
 	type DocumentTurnMetadata,
 	type MessageMetadata,
@@ -37,6 +39,7 @@ import {
 } from "./document-turn.service.js";
 import type { ChatOptions } from "./dto/chat-body.dto.js";
 import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js";
+import { GetChatsDto } from "./dto/get-chats.dto.js";
 import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
 import { MODEL_IDS } from "./models/model-catalog.js";
 
@@ -228,7 +231,11 @@ export class AiService {
 			let documentPrompt: DocumentPromptContext | undefined;
 
 			if (turn.document.kind === "ASK_HEADER") {
-				documentPrompt = { status: "ASK_HEADER", type: turn.document.type, missing: turn.document.missing };
+				documentPrompt = {
+					status: "ASK_HEADER",
+					type: turn.document.type,
+					missing: turn.document.missing,
+				};
 				documentMetadata = {
 					action: "ASK_HEADER",
 					type: turn.document.type,
@@ -278,12 +285,7 @@ export class AiService {
 			const input = buildRagPrompt(ctx.prompt, chunks, history);
 			const provider = this.aiFactory.create(turn.model);
 			// After the document, so a document made this turn can be attached to a Classroom assignment.
-			const tools = await this.resolveTools(
-				ctx.user.id,
-				ctx.conversation.id,
-				turn,
-				ctx.allowance,
-			);
+			const tools = await this.resolveTools(ctx.user.id, ctx.conversation.id, turn, ctx.allowance);
 
 			yield {
 				type: "status",
@@ -562,6 +564,65 @@ export class AiService {
 			this.logger.error("[RAG] search failed", error);
 			return [];
 		}
+	}
+
+	async getOlderChat(payload: GetChatsDto, userId: string) {
+		if (!userId) {
+			throw new UnauthorizedException("user id not provided");
+		}
+
+		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
+
+		if (!user) {
+			throw new NotFoundException("User not found");
+		}
+
+		const conversations = await this.db
+			.select()
+			.from(conversationsTable)
+			.where(eq(conversationsTable.userId, userId))
+			.orderBy(desc(conversationsTable.updatedAt));
+
+		return conversations;
+	}
+
+	async deleteConversation(conversationId: string, userId: string, deleteDocuments: boolean) {
+		if (!userId) {
+			throw new UnauthorizedException("user id not provided");
+		}
+
+		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
+
+		if (!user) {
+			throw new NotFoundException("User not found");
+		}
+
+		await this.db.delete(conversationsTable).where(eq(conversationsTable.id, conversationId));
+
+		if (deleteDocuments === true) {
+			await this.db
+				.delete(assessmentsTable)
+				.where(eq(assessmentsTable.conversationId, conversationId));
+		}
+	}
+
+	async renameConversation(conversationId: string, userId: string, newTitle: string) {
+		if (!userId) {
+			throw new UnauthorizedException("user id not provided");
+		}
+
+		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
+
+		if (!user) {
+			throw new NotFoundException("User not found");
+		}
+
+		await this.db
+			.update(conversationsTable)
+			.set({
+				title: newTitle,
+			})
+			.where(eq(conversationsTable.id, conversationId));
 	}
 }
 

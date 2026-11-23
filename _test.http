@@ -34,7 +34,7 @@
 @name = Matita akinator
 
 # Copy the __Host-sid value from the Set-Cookie header of LOGIN / REGISTER.
-@cookie = __Host-sid=eXdNMdCww6WJpQYSCzBHcKf56rLeo8HDKm7jeJJQCg8
+@cookie = __Host-sid=XpfrktOV2BkkkIUc6J19X-Ov4fdJQMhcnqtDgz9UGwg
 
 # Ids reused by several requests. Paste real values here.
 @conversationId = ef0d5982-d526-4062-956c-a1db81ca7d53
@@ -187,6 +187,11 @@ Cookie: {{cookie}}
     "prompt": "Quantos alunos tem a minha primeira turma?",
     "model": "CHEAP"
 }
+
+
+###
+GET {{baseUrl}}/ai/chat
+Cookie: {{cookie}}
 
 
 # =============================================================================

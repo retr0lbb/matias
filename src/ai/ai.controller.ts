@@ -1,10 +1,22 @@
 import { Authenticate, CurrentUser } from "@nestjs/authentication";
-import { Body, Controller, Logger, Post, Query, Res } from "@nestjs/common";
+import {
+	Body,
+	Controller,
+	Delete,
+	Get,
+	Logger,
+	Param,
+	Patch,
+	Post,
+	Query,
+	Res,
+} from "@nestjs/common";
 import type { Response } from "express";
 import type { User } from "../db/schemas/user.js";
 import { ZodValidationPipe } from "../shared/pipes/zodValidationPipe.js";
 import { AiService } from "./ai.service.js";
 import { type ChatBody, chatBodySchema } from "./dto/chat-body.dto.js";
+import { renameChatSchema } from "./dto/rename-chat.dto.js";
 
 @Controller("ai/chat")
 export class AiController {
@@ -54,5 +66,31 @@ export class AiController {
 		} finally {
 			res.end();
 		}
+	}
+
+	@Get("")
+	@Authenticate()
+	async getAllChats(@CurrentUser() user: User) {
+		return await this.aiService.getOlderChat({}, user.id);
+	}
+
+	@Authenticate()
+	@Delete("/:conversationId")
+	async deleteConversation(
+		@Param("conversationId") convId: string,
+		@CurrentUser() user: User,
+		@Body() body: { deleteDocuments: boolean },
+	) {
+		await this.aiService.deleteConversation(convId, user.id, body.deleteDocuments);
+	}
+
+	@Authenticate()
+	@Patch("/:conversationId")
+	async renameConversation(
+		@Param("conversationId") convId: string,
+		@CurrentUser() user: User,
+		@Body(new ZodValidationPipe(renameChatSchema)) body: { newTitle: string },
+	) {
+		await this.aiService.renameConversation(convId, user.id, body.newTitle);
 	}
 }
