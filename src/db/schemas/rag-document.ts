@@ -8,6 +8,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { messagesTable } from "./message.js";
 import { userTable } from "./user.js";
 
 export const ragDocumentStatusEnum = pgEnum("rag_document_status", [
@@ -24,6 +25,10 @@ export const ragDocumentsTable = pgTable(
       .references(() => userTable.id, { onDelete: "cascade" })
       .notNull(),
     conversationId: uuid("conversation_id"),
+    // The user message the file was sent with; set when that message is saved.
+    messageId: uuid("message_id").references(() => messagesTable.id, {
+      onDelete: "set null",
+    }),
     filename: varchar().notNull(),
     mimeType: varchar("mime_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
@@ -40,6 +45,7 @@ export const ragDocumentsTable = pgTable(
       tb.conversationId,
     ),
     index("rag_documents_user_created_at_index").on(tb.userId, tb.createdAt),
+    index("rag_documents_message_id_index").on(tb.messageId),
   ],
 );
 

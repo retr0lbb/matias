@@ -3,6 +3,7 @@ import { ConfigModule } from "@nestjs/config";
 import { AiController } from "./ai.controller.js";
 import { AiService } from "./ai.service.js";
 import { AiExpensesFactory } from "./ai.factory.js";
+import { ChatHistoryService } from "./chat-history.service.js";
 import { ClassroomModule } from "../classroom/classroom.module.js";
 import { ConversationModule } from "../conversation/conversation.module.js";
 import { DocumentsModule } from "../documents/documents.module.js";
@@ -21,7 +22,7 @@ import { JudgeModel } from "./models/judge-model.js";
 		DocumentsModule,
 	],
 	controllers: [AiController],
-	providers: [AiService, AiExpensesFactory, JudgeModel, DocumentTurnService],
+	providers: [AiService, AiExpensesFactory, JudgeModel, DocumentTurnService, ChatHistoryService],
 	exports: [AiService, AiExpensesFactory],
 })
 export class AiModule {}

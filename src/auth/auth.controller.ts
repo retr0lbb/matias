@@ -34,4 +34,17 @@ export class AuthController {
 
 		return { mfaRequired: session.mfa === "pending" };
 	}
+
+	/**
+	 * Ends this browser's session on the spot: the session row is deleted, so
+	 * the cookie stops working immediately, and the cookie is cleared. Public
+	 * and idempotent, so an expired or missing session still gets its cookie
+	 * cleared instead of a 401.
+	 */
+	@Public()
+	@Post("/logout")
+	@HttpCode(204)
+	async logoutUser(): Promise<void> {
+		await this.signInService.signOut();
+	}
 }

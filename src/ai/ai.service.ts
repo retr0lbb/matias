@@ -1,20 +1,15 @@
-import {
-	Injectable,
-	Logger,
-	NotFoundException,
-	UnauthorizedException,
-} from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { InjectDrizzle } from "@nestjs/drizzle";
-import { desc, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { ClassroomToolsService } from "../classroom/classroom-tools.service.js";
 import { conversationsTable } from "../db/schemas/conversation.js";
-import { documentsTable } from "../db/schemas/document.js";
 import {
 	type DocumentTurnMetadata,
 	type MessageMetadata,
 	messagesTable,
 } from "../db/schemas/message.js";
+import { ragDocumentsTable } from "../db/schemas/rag-document.js";
 import { userTable } from "../db/schemas/user.js";
 import { ConversationContextService } from "../conversation/conversation-context.service.js";
 import type { RagSearchResult } from "../rag/rag.service.js";
@@ -38,7 +33,6 @@ import {
 } from "./document-turn.service.js";
 import type { ChatOptions } from "./dto/chat-body.dto.js";
 import type { ChatStreamEvent, ModelSelection } from "./dto/chat-stream-event.js";
-import { GetChatsDto } from "./dto/get-chats.dto.js";
 import { type JudgeClassification, JudgeModel } from "./models/judge-model.js";
 import { MODEL_IDS } from "./models/model-catalog.js";
 
@@ -172,11 +166,18 @@ export class AiService {
 				});
 			}
 
-			await this.db.insert(messagesTable).values({
-				conversationId: ctx.conversation.id,
-				role: "USER",
-				content: ctx.prompt,
-			});
+			const [userMessage] = await this.db
+				.insert(messagesTable)
+				.values({
+					conversationId: ctx.conversation.id,
+					role: "USER",
+					content: ctx.prompt,
+				})
+				.returning({ id: messagesTable.id });
+			await this.touchConversation(ctx.conversation.id);
+			if (userMessage) {
+				await this.attachPendingFiles(ctx, userMessage.id);
+			}
 
 			let documentPrompt: DocumentPromptContext | undefined;
 
@@ -418,6 +419,7 @@ export class AiService {
 				status,
 				metadata: { ...this.buildMetadata(turn, final, partialThinking), document },
 			});
+			await this.touchConversation(ctx.conversation.id);
 		} catch (error) {
 			this.logger.error(
 				`[STREAM] failed to save IA message conversation=${ctx.conversation.id}`,
@@ -497,63 +499,36 @@ export class AiService {
 		}
 	}
 
-	async getOlderChat(payload: GetChatsDto, userId: string) {
-		if (!userId) {
-			throw new UnauthorizedException("user id not provided");
-		}
-
-		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
-
-		if (!user) {
-			throw new NotFoundException("User not found");
-		}
-
-		const conversations = await this.db
-			.select()
-			.from(conversationsTable)
-			.where(eq(conversationsTable.userId, userId))
-			.orderBy(desc(conversationsTable.updatedAt));
-
-		return conversations;
-	}
-
-	async deleteConversation(conversationId: string, userId: string, deleteDocuments: boolean) {
-		if (!userId) {
-			throw new UnauthorizedException("user id not provided");
-		}
-
-		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
-
-		if (!user) {
-			throw new NotFoundException("User not found");
-		}
-
-		await this.db.delete(conversationsTable).where(eq(conversationsTable.id, conversationId));
-
-		if (deleteDocuments === true) {
-			await this.db
-				.delete(documentsTable)
-				.where(eq(documentsTable.conversationId, conversationId));
-		}
-	}
-
-	async renameConversation(conversationId: string, userId: string, newTitle: string) {
-		if (!userId) {
-			throw new UnauthorizedException("user id not provided");
-		}
-
-		const [user] = await this.db.select().from(userTable).where(eq(userTable.id, userId));
-
-		if (!user) {
-			throw new NotFoundException("User not found");
-		}
-
+	/** Moves the chat to the top of the list: every new message counts as activity. */
+	private async touchConversation(conversationId: string): Promise<void> {
 		await this.db
 			.update(conversationsTable)
-			.set({
-				title: newTitle,
-			})
+			.set({ updatedAt: new Date() })
 			.where(eq(conversationsTable.id, conversationId));
+	}
+
+	/**
+	 * Files uploaded to the conversation since the last user message were sent
+	 * with this one. Best effort: a failure only hides them on the old bubble.
+	 */
+	private async attachPendingFiles(ctx: ChatStreamContext, messageId: string): Promise<void> {
+		try {
+			await this.db
+				.update(ragDocumentsTable)
+				.set({ messageId })
+				.where(
+					and(
+						eq(ragDocumentsTable.userId, ctx.user.id),
+						eq(ragDocumentsTable.conversationId, ctx.conversation.id),
+						isNull(ragDocumentsTable.messageId),
+					),
+				);
+		} catch (error) {
+			this.logger.error(
+				`[STREAM] could not link attachments conversation=${ctx.conversation.id}`,
+				error,
+			);
+		}
 	}
 }
 

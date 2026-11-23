@@ -84,6 +84,7 @@ On top of auth, many routes check the user's **plan** (`plans.limits`, see [`spe
 | ------ | --------------------------------------- | ------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | POST   | `/auth/register`                        | Public  | Body `{ email, name, password }`                                 | The new user. Signs them in (sets the cookie) and sends the verification email                      |
 | POST   | `/auth/login`                           | Public  | Body `{ email, password }`                                       | `{ mfaRequired }` and sets the session cookie. Wrong credentials give `401`                         |
+| POST   | `/auth/logout`                          | Public  | —                                                                | `204`. Deletes this browser's session right away and clears the cookie. Safe to call with no or an expired session |
 | POST   | `/auth/email/verify`                    | Public  | Body `{ token }` (from the email link)                           | `{ email, emailVerified: true }`. An invalid or expired token gives `400`                           |
 | POST   | `/auth/email/verification`              | Session | —                                                                | `202`, and resends the verification email. Gives `409` if the email is already verified             |
 | GET    | `/me`                                   | Session | —                                                                | The signed-in user                                                                                  |
@@ -96,7 +97,29 @@ On top of auth, many routes check the user's **plan** (`plans.limits`, see [`spe
 
 | Method | Path              | Auth     | Requires                                                                                                                                           | Returns / notes                                                       |
 | ------ | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| POST   | `/ai/chat/stream` | Verified | Body `{ prompt, model?: "AUTO" \| "CHEAP" \| "NORMAL" \| "EXPENSIVE", thinkingLevel?: "DEFAULT" \| "HIGH" \| "ULTRA_HIGH" }`. Query `conversationId?` | Server-Sent Events (see below). Without `conversationId`, a new conversation is started. This is the only chat route |
+| POST   | `/ai/chat/stream` | Verified | Body `{ prompt, model?: "AUTO" \| "CHEAP" \| "NORMAL" \| "EXPENSIVE", thinkingLevel?: "DEFAULT" \| "HIGH" \| "ULTRA_HIGH" }`. Query `conversationId?` | Server-Sent Events (see below). Without `conversationId`, a new conversation is started. This is the only route that sends messages |
+| GET    | `/ai/chat`        | Session  | Query `limit?` (1–100, default 30), `cursor?` (the previous page's `nextCursor`)                                                                    | `{ items: [{ id, title, createdAt, updatedAt }], nextCursor }`, most recently active first. `nextCursor` is `null` on the last page |
+| GET    | `/ai/chat/:id`    | Session  | —                                                                                                                                                  | `{ id, title, createdAt, updatedAt, messages }`, messages oldest first (see below). `404` when the chat is missing or not yours |
+| PATCH  | `/ai/chat/:id`    | Session  | Body `{ title }` (1–256 chars)                                                                                                                     | `{ id, title, createdAt, updatedAt }`. Does not move the chat in the list. `404` when missing or not yours |
+| DELETE | `/ai/chat/:id`    | Session  | Query `deleteDocuments?=true` (or body `{ deleteDocuments: true }`) also deletes the documents made in the chat                                    | `204`. Its messages are deleted with it; files uploaded to it are kept. `404` when missing or not yours |
+
+`updatedAt` is set when a chat is created and bumped on every new message (user and assistant), so the list order follows activity. Renaming does not bump it.
+
+Pagination is keyset on `(updatedAt, id)`: keep calling with the last `nextCursor` until it is `null`. The cursor is opaque, so send it back as is; a malformed one gives `400`. A new chat started from the stream lands at the top, so refetch the first page after the `start` event.
+
+A chat that is missing or belongs to someone else always gives `404` on these routes (never `403`), so they don't reveal that it exists. Sending a message to someone else's chat (`POST /ai/chat/stream?conversationId=…`) still gives `403`.
+
+Each message in `GET /ai/chat/:id` (defined in `src/ai/dto/chat-detail.dto.ts`):
+
+| Field         | Notes                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| `id`, `role`, `text`, `createdAt` | `role` is `"user"` or `"assistant"`                                                       |
+| `status`      | Assistant: `COMPLETED`, `FAILED` (client aborted) or `ERROR`; the text may be partial. `null` for user messages |
+| `thinking`    | Assistant thinking text, or `null`                                                                            |
+| `model`       | Assistant: `{ tier, selection, thinkingLevel, downgradedFrom, upgradedFrom }`, or `null`                       |
+| `documents`   | Assistant: `[{ id, documentType, action, title, version }]` made or changed that turn (current title/version). Load from `/documents/:id` |
+| `attachments` | User: `[{ id, name, type }]` files sent with the message (files uploaded before this change are not linked)   |
+| `tools`       | Assistant: `[{ name, ok }]` Classroom tools called that turn                                                  |
 
 Plan checks: messages per cycle for each model tier (`429`), and `thinkingLevel` up to the plan's `maxThinkingLevel` (`403`). With `AUTO`, a judge model picks the tier, and moves down a tier when the chosen one has no quota left.
 
@@ -132,7 +155,7 @@ Errors found before the stream starts (auth, validation, plan) come back as norm
 | POST   | `/rag/documents/batch`| Verified | `multipart/form-data` with field `files` (1 to 10 files, 20 MB each at most). `conversationId?`      | One record per file. Gives `400` when no file is sent                |
 | GET    | `/rag/documents/:id`  | Verified | Path `id`                                                                                          | The processing status of the document                                |
 
-Searching happens inside the chat (`POST /ai/chat/stream` with a `conversationId`); there is no search route. Plan checks: uploads per cycle (`429`), the plan's `maxFileBytes` (`413`, with a hard cap of 50 MB) and total storage (`413`). The file's real content is checked against its extension. See [`specs/rag-vector-database.md`](specs/rag-vector-database.md).
+Searching happens inside the chat (`POST /ai/chat/stream` with a `conversationId`); there is no search route. When the next user message in that conversation is saved, the files uploaded since the previous one are linked to it (`rag_documents.message_id`), and `GET /ai/chat/:id` shows them as that message's `attachments`. Plan checks: uploads per cycle (`429`), the plan's `maxFileBytes` (`413`, with a hard cap of 50 MB) and total storage (`413`). The file's real content is checked against its extension. See [`specs/rag-vector-database.md`](specs/rag-vector-database.md).
 
 ### Documents: `/documents`
 

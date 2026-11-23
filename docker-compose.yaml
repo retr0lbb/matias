@@ -1,3 +1,4 @@
+version: '3.8'
 
 services:
   postgres:
@@ -7,19 +8,10 @@ services:
       POSTGRES_USER: docker
       POSTGRES_PASSWORD: docker
       POSTGRES_DB: matias
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  backend:
-    image: matias:latest # Imagem já existente no servidor
-    container_name: matias_backend
-    env_file:
-      - .env.prod
-    ports:
-      - "3000:3000"
-    depends_on:
-      - postgres
     restart: unless-stopped
 
 volumes:

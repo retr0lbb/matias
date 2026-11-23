@@ -75,6 +75,12 @@ Content-Type: application/json
     "password": "{{pass}}"
 }
 
+### LOGOUT — PUBLIC
+# Deletes this browser's session right away and clears the cookie.
+# Returns: 204 (also when there was no session or it had expired)
+POST {{baseUrl}}/auth/logout
+Cookie: {{cookie}}
+
 ### [1.3] VERIFY EMAIL — PUBLIC
 # Body:    { token }  (the token from the link in the verification email)
 # Returns: { email, emailVerified: true }
@@ -190,7 +196,28 @@ Cookie: {{cookie}}
 
 
 ###
-GET {{baseUrl}}/ai/chat
+GET {{baseUrl}}/ai/chat?limit=30
+Cookie: {{cookie}}
+
+### Next page: pass the nextCursor of the previous response
+GET {{baseUrl}}/ai/chat?limit=30&cursor=<nextCursor>
+Cookie: {{cookie}}
+
+### One chat with its messages (404 when missing or not yours)
+GET {{baseUrl}}/ai/chat/{{conversationId}}
+Cookie: {{cookie}}
+
+### Rename
+PATCH {{baseUrl}}/ai/chat/{{conversationId}}
+Content-Type: application/json
+Cookie: {{cookie}}
+
+{
+    "title": "Prova de frações"
+}
+
+### Delete (add ?deleteDocuments=true to delete its documents too)
+DELETE {{baseUrl}}/ai/chat/{{conversationId}}
 Cookie: {{cookie}}
 
 
