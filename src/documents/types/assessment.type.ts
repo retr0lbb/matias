@@ -5,6 +5,8 @@ export const assessmentType = defineDocumentType({
   type: 'assessment',
   label: 'Avaliação',
   chatLabel: 'a avaliação',
+  judgeSummary:
+    'a printable school test with questions and an answer key: prova, avaliação, simulado, atividade avaliativa',
   filenameFallback: 'avaliacao',
   allowedBlocks: ['multiple_choice', 'open_ended', 'text', 'code'],
   hasAnswerKey: true,

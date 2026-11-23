@@ -1,5 +1,7 @@
 # Message metadata (AI token & model info)
 
+> **Update (2026-11-22):** `POST /ai/chat`, `AiService.chat()` and every model's `generate()` were removed. `POST /ai/chat/stream` is now the only chat route, and models only implement `generateStream()`. Passages below about the non-streaming path are history.
+
 Store generation metadata on every IA message, from both `chat()` and `streamAnswer()`.
 
 ## Decisions

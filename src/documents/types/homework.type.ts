@@ -5,6 +5,8 @@ export const homeworkType = defineDocumentType({
   type: 'homework',
   label: 'Tarefa',
   chatLabel: 'a tarefa',
+  judgeSummary:
+    'exercises for the students to do at home, with an answer key: tarefa de casa, lista de exercícios, dever de casa',
   filenameFallback: 'tarefa',
   allowedBlocks: ['multiple_choice', 'open_ended', 'text', 'list', 'code'],
   hasAnswerKey: true,

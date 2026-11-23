@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
 import { renderBlockTitle } from './shared.js';
+import { blockTitle, items } from '../render/docx-kit.js';
 
 export const MAX_LIST_ITEMS = 30;
 
@@ -21,6 +22,10 @@ export const listBlock = defineContentBlock({
 
     return `<div class="block block-list">${renderBlockTitle(block.title)}<${tag} class="block-list-items">${items}</${tag}></div>`;
   },
+  renderDocx: (block, context) => [
+    ...blockTitle(context, block.title),
+    ...items(context, block.items, block.style === 'numbered'),
+  ],
   css: `
 .block-list-items { margin: 0; padding-left: 1.4em; }
 .block-list-items li { margin-bottom: 0.2em; white-space: pre-wrap; }

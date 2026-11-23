@@ -3,6 +3,8 @@ import { escapeHtml } from '../render/escape-html.js';
 import { alternativeLabel } from '../render/format.js';
 import { defineScoredBlock } from './block.js';
 import { renderAnswerEntry, renderQuestionHead } from './shared.js';
+import { Paragraph, TextRun } from 'docx';
+import { em, questionHead, questionIndent, textRuns } from '../render/docx-kit.js';
 
 export const MAX_EXPLANATION_LENGTH = 1000;
 
@@ -37,6 +39,24 @@ export const multipleChoiceBlock = defineScoredBlock({
       explanation: block.explanation,
       sources: block.sources,
     }),
+  renderDocx: (block, number, context) => {
+    const labelWidth = questionIndent(context);
+    const last = block.alternatives.length - 1;
+
+    return [
+      questionHead(context, number, block),
+      ...block.alternatives.map(
+        (alternative, index) =>
+          new Paragraph({
+            indent: { left: labelWidth * 2, hanging: labelWidth },
+            spacing: { after: em(context, index === last ? 0.6 : 0.25) },
+            keepNext: index < last,
+            keepLines: true,
+            children: [new TextRun(`${alternativeLabel(index)})\t`), ...textRuns(alternative)],
+          }),
+      ),
+    ];
+  },
   css: `
 .alternatives { list-style: none; margin: 0.5em 0 0 1.6em; }
 .alternative { display: flex; gap: 0.5em; margin-bottom: 0.25em; }

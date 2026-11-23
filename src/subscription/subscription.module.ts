@@ -9,5 +9,6 @@ import { AsaasWebhookController } from "./webhooks/asaas-webhook.controller.js";
 	imports: [PaymentModule],
 	controllers: [SubscriptionController, AsaasWebhookController],
 	providers: [SubscriptionService, PaymentRecordService],
+	exports: [SubscriptionService, PaymentRecordService],
 })
 export class SubscriptionModule {}

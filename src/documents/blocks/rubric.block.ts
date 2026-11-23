@@ -3,6 +3,7 @@ import { escapeHtml } from '../render/escape-html.js';
 import { formatNumber } from '../render/format.js';
 import { defineContentBlock } from './block.js';
 import { renderBlockTitle } from './shared.js';
+import { blockTitle, borderedTable, spacer } from '../render/docx-kit.js';
 
 export const MAX_RUBRIC_CRITERIA = 10;
 
@@ -68,6 +69,27 @@ export const rubricBlock = defineContentBlock({
       '</div>',
     ].join('');
   },
+  renderDocx: (block, context) => [
+    ...blockTitle(context, block.title),
+    borderedTable(
+      context,
+      [
+        ['Critério', 'O que será avaliado', { text: 'Pontos', center: true }],
+        ...block.criteria.map(({ criterion, description, points }) => [
+          criterion,
+          description ?? '',
+          { text: formatNumber(points), center: true },
+        ]),
+        [
+          { text: 'Total', bold: true },
+          '',
+          { text: formatNumber(sumPoints(block.criteria)), bold: true, center: true },
+        ],
+      ],
+      { columnWeights: [3, 5, 1.2] },
+    ),
+    spacer(context, 1.2),
+  ],
   css: `
 .block-rubric .rubric-points { text-align: center; white-space: nowrap; width: 4.5em; }
 .block-rubric tfoot td { font-weight: bold; border: 1px solid #555; padding: 0.3em 0.5em; }

@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
+import { codeBox } from '../render/docx-kit.js';
 
 export const MAX_CODE_LENGTH = 4000;
 
@@ -24,6 +25,7 @@ export const codeBlock = defineContentBlock({
   },
   renderHtml: renderCode,
   renderAnswer: renderCode,
+  renderDocx: (block, context) => codeBox(context, block.code, block.language),
   css: `
 .block-code-language { font-size: 0.75em; color: #444; text-transform: uppercase; margin-bottom: 0.2em; }
 .block-code pre { margin: 0; padding: 0.6em 0.8em; background: #f3f4f6; border: 1px solid #d1d5db; font-family: "Courier New", "Liberation Mono", monospace; font-size: 0.85em; white-space: pre-wrap; overflow-wrap: anywhere; }

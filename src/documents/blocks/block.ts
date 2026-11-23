@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import type { DocxBlock, DocxContext } from '../render/docx-kit.js';
 
 // A block kind is one self-contained definition: its fields, how it renders,
 // what the AI is told about it. Adding a kind = one file + one line in
@@ -58,6 +59,8 @@ export interface BlockDefinition<
   readonly aiGuide: string;
   /** `number` is set for scored blocks and null for content blocks. */
   renderHtml(block: BlockLike, number: number | null): string;
+  /** The same block in Word, for the student's document (never the answers). */
+  renderDocx(block: BlockLike, number: number | null, context: DocxContext): DocxBlock[];
   /** Absent = the block is left out of the answer key. */
   renderAnswer?(block: BlockLike, number: number | null): string;
   /** Points this block adds to the document's value. Absent = none. Scored blocks: their `points`. */
@@ -73,6 +76,11 @@ interface DefinitionInput<Kind extends string, Shape extends z.ZodRawShape> {
   css: string;
   aiGuide: string;
   renderHtml: (block: StoredOf<Kind, Shape>, number: number | null) => string;
+  renderDocx: (
+    block: StoredOf<Kind, Shape>,
+    number: number | null,
+    context: DocxContext,
+  ) => DocxBlock[];
   renderAnswer?: (block: StoredOf<Kind, Shape>, number: number | null) => string;
   pointsOf?: (block: StoredOf<Kind, Shape>) => number;
 }
@@ -100,7 +108,7 @@ function defineBlock<const Kind extends string, Shape extends z.ZodRawShape>(
     });
   };
 
-  const { renderHtml, renderAnswer, pointsOf } = definition;
+  const { renderHtml, renderDocx, renderAnswer, pointsOf } = definition;
 
   return {
     kind: definition.kind,
@@ -110,6 +118,8 @@ function defineBlock<const Kind extends string, Shape extends z.ZodRawShape>(
     css: definition.css,
     aiGuide: definition.aiGuide,
     renderHtml: (block, number) => renderHtml(block as StoredOf<Kind, Shape>, number),
+    renderDocx: (block, number, context) =>
+      renderDocx(block as StoredOf<Kind, Shape>, number, context),
     renderAnswer: renderAnswer
       ? (block, number) => renderAnswer(block as StoredOf<Kind, Shape>, number)
       : undefined,
@@ -124,6 +134,7 @@ interface ContentInput<Kind extends string, Shape extends z.ZodRawShape> {
   css: string;
   aiGuide: string;
   renderHtml: (block: StoredOf<Kind, Shape>) => string;
+  renderDocx: (block: StoredOf<Kind, Shape>, context: DocxContext) => DocxBlock[];
   /** Pass `renderHtml` again when the answer key needs the block (e.g. code a question refers to). */
   renderAnswer?: (block: StoredOf<Kind, Shape>) => string;
   /** For content that carries points without being a question (e.g. a rubric). */
@@ -134,12 +145,13 @@ interface ContentInput<Kind extends string, Shape extends z.ZodRawShape> {
 export function defineContentBlock<const Kind extends string, Shape extends z.ZodRawShape>(
   input: ContentInput<Kind, Shape>,
 ) {
-  const { renderHtml, renderAnswer } = input;
+  const { renderHtml, renderDocx, renderAnswer } = input;
 
   return defineBlock<Kind, Shape>({
     ...input,
     scored: false,
     renderHtml: (block) => renderHtml(block),
+    renderDocx: (block, _number, context) => renderDocx(block, context),
     renderAnswer: renderAnswer ? (block) => renderAnswer(block) : undefined,
   });
 }
@@ -154,6 +166,11 @@ interface ScoredInput<Kind extends string, Shape extends z.ZodRawShape> {
   css: string;
   aiGuide: string;
   renderHtml: (block: StoredOf<Kind, ScoredFull<Shape>>, number: number) => string;
+  renderDocx: (
+    block: StoredOf<Kind, ScoredFull<Shape>>,
+    number: number,
+    context: DocxContext,
+  ) => DocxBlock[];
   renderAnswer: (block: StoredOf<Kind, ScoredFull<Shape>>, number: number) => string;
 }
 
@@ -161,7 +178,7 @@ interface ScoredInput<Kind extends string, Shape extends z.ZodRawShape> {
 export function defineScoredBlock<const Kind extends string, Shape extends z.ZodRawShape>(
   input: ScoredInput<Kind, Shape>,
 ) {
-  const { renderHtml, renderAnswer } = input;
+  const { renderHtml, renderDocx, renderAnswer } = input;
 
   return defineBlock<Kind, ScoredFull<Shape>>({
     ...input,
@@ -169,6 +186,7 @@ export function defineScoredBlock<const Kind extends string, Shape extends z.Zod
     scored: true,
     // The layout always numbers scored blocks.
     renderHtml: (block, number) => renderHtml(block, number as number),
+    renderDocx: (block, number, context) => renderDocx(block, number as number, context),
     renderAnswer: (block, number) => renderAnswer(block, number as number),
     // `scoredShape` always adds `points`; TypeScript can't see it through the generic Shape.
     pointsOf: (block) => (block as unknown as z.output<z.ZodObject<typeof scoredShape>>).points,

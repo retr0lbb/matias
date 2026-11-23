@@ -55,8 +55,10 @@ export interface DocumentAllowance {
 
 export interface ModelChoice {
   model: MessageExpense;
-  /** Set when AUTO wanted a bigger model that had no quota left. */
+  /** Set when the preferred model had no quota left and a cheaper one was used. */
   downgradedFrom?: MessageExpense;
+  /** Set when the preferred model was below the turn's minimum (documents), or full and only a bigger one was left. */
+  upgradedFrom?: MessageExpense;
 }
 
 type Counter = { used: number; limit: number | null };
@@ -270,18 +272,37 @@ export class UsageService {
   }
 
   /**
-   * AUTO mode: `preferred` if it has quota, else the next cheaper model that
-   * does. Throws when not even the cheapest model has quota left.
+   * Picks the model a turn runs on. Starts at `preferred` raised to `minimum`,
+   * then tries cheaper models down to `minimum`. A document turn passes a
+   * minimum above CHEAP: it never falls back to CHEAP and may move to a bigger
+   * model instead. Throws when no allowed model has quota left.
    */
-  pickAvailableModel(allowance: ChatAllowance, preferred: MessageExpense): ModelChoice {
-    const candidates = MODELS_BY_COST.slice(MODELS_BY_COST.indexOf(preferred));
-    const model = candidates.find((candidate) => this.hasQuota(allowance, candidate));
+  pickAvailableModel(
+    allowance: ChatAllowance,
+    preferred: MessageExpense,
+    minimum: MessageExpense = "CHEAP",
+  ): ModelChoice {
+    const rank = (expense: MessageExpense) => MODELS_BY_COST.length - MODELS_BY_COST.indexOf(expense);
+    const start = rank(preferred) >= rank(minimum) ? preferred : minimum;
+
+    // MODELS_BY_COST is biggest first: from `start` down to `minimum`, then the
+    // bigger ones going up. Plain chat (minimum CHEAP) never goes up, as before.
+    const downward = MODELS_BY_COST.slice(
+      MODELS_BY_COST.indexOf(start),
+      MODELS_BY_COST.indexOf(minimum) + 1,
+    );
+    const upward =
+      minimum === "CHEAP" ? [] : MODELS_BY_COST.slice(0, MODELS_BY_COST.indexOf(start)).reverse();
+    const model = [...downward, ...upward].find((candidate) => this.hasQuota(allowance, candidate));
 
     if (!model) {
-      throw this.messageQuotaError(allowance, "CHEAP");
+      throw this.messageQuotaError(allowance, minimum);
     }
 
-    return model === preferred ? { model } : { model, downgradedFrom: preferred };
+    if (model === preferred) return { model };
+    return rank(model) > rank(preferred)
+      ? { model, upgradedFrom: preferred }
+      : { model, downgradedFrom: preferred };
   }
 
   private messageQuotaError(

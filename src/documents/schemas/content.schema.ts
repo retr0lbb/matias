@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { aiBlockUnion, type BlockKind, storedBlockUnion } from '../blocks/registry.js';
+import { aiHeaderSchema } from './header.schema.js';
 
 export type { AiBlock, AiBlockInput, Block } from '../blocks/registry.js';
 
@@ -34,6 +35,11 @@ export function createContentSchemas(kinds: readonly BlockKind[]) {
         });
       }
     });
+
+  /** What generation returns: the content plus any header text the teacher gave. */
+  const aiDraft = aiContent.safeExtend({
+    header: aiHeaderSchema.optional(),
+  });
 
   // What the server stores: the same content plus server-generated ids.
   const block = storedBlockUnion(kinds);
@@ -70,13 +76,14 @@ export function createContentSchemas(kinds: readonly BlockKind[]) {
       });
     });
 
-  return { aiBlock, aiSection, aiContent, block, section, content };
+  return { aiBlock, aiSection, aiContent, aiDraft, block, section, content };
 }
 
 export type ContentSchemas = ReturnType<typeof createContentSchemas>;
 
 /** AI output after validation (defaults applied). */
 export type AiContent = z.infer<ContentSchemas['aiContent']>;
+export type AiDraft = z.infer<ContentSchemas['aiDraft']>;
 /** AI output before validation (`lines` may be missing). */
 export type AiContentInput = z.input<ContentSchemas['aiContent']>;
 export type AiSection = z.infer<ContentSchemas['aiSection']>;

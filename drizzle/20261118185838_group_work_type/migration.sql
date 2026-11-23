@@ -1,1 +1,0 @@
-ALTER TYPE "document_type" ADD VALUE 'group_work';

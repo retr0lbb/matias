@@ -10,6 +10,8 @@ export const groupWorkType = defineDocumentType({
   type: 'group_work',
   label: 'Trabalho em grupo',
   chatLabel: 'o trabalho em grupo',
+  judgeSummary:
+    'a research project done by a group of students, with deliverable, rubric and correction guide: trabalho em grupo, seminário, projeto de pesquisa',
   filenameFallback: 'trabalho-em-grupo',
   allowedBlocks: ['text', 'list', 'table', 'research_task', 'deliverable', 'rubric'],
   hasAnswerKey: true,

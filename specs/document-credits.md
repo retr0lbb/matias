@@ -43,7 +43,7 @@ Quota code: `DOCUMENTS_PER_CYCLE`.
 
 ## Thinking level
 
-`POST /documents`, `/documents/:id/revise`, `/documents/:id/regenerate` accept `thinkingLevel` (`DEFAULT | HIGH | ULTRA_HIGH`,
+A document turn in the chat (`POST /ai/chat/stream`) runs with the turn's `thinkingLevel` (`DEFAULT | HIGH | ULTRA_HIGH`,
 default `DEFAULT` = Gemini LOW, same as before). Above the plan max → 403 `THINKING_LEVEL_NOT_ALLOWED`
 (same rule as chat).
 

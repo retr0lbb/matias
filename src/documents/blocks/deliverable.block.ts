@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
 import { renderBlockTitle, renderLabelledItems } from './shared.js';
+import { blockTitle, body, framed, labelled, labelledItems, spacer } from '../render/docx-kit.js';
 
 export const DELIVERABLE_FORMATS = [
   'written_report',
@@ -81,6 +82,24 @@ export const deliverableBlock = defineContentBlock({
       '</div>',
     ].join('');
   },
+  renderDocx: (block, context) => [
+    framed(
+      context,
+      [
+        ...blockTitle(context, block.title),
+        labelled(
+          context,
+          'Entrega:',
+          `${FORMAT_LABELS[block.format]}${block.length ? ` (${block.length})` : ''}`,
+        ),
+        body(context, block.description),
+        ...labelledItems(context, 'Estrutura obrigatória:', block.requiredSections, true),
+        ...(block.formatting ? [labelled(context, 'Formatação:', block.formatting)] : []),
+      ],
+      'box',
+    ),
+    spacer(context, 1.2),
+  ],
   css: `
 .block-deliverable { border: 1px solid var(--accent); padding: 0.6em 0.8em; break-inside: avoid; }
 .deliverable-description { white-space: pre-wrap; margin: 0.3em 0; }

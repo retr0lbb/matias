@@ -8,87 +8,81 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectDrizzle } from '@nestjs/drizzle';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import {
-  type DocumentRow,
-  documentsTable,
-} from '../db/schemas/document.js';
-import {
-  type ConversationRef,
-  ConversationContextService,
-  type RecordedTurn,
-} from '../conversation/conversation-context.service.js';
-import type { ThinkingLevelOption } from '../usage/plan-limits.js';
+import { type DocumentRow, documentsTable } from '../db/schemas/document.js';
 import {
   type DbExecutor,
   type DocumentAllowance,
   UsageService,
   type UsageSubject,
 } from '../usage/usage.service.js';
-import { isScoredBlock } from './blocks/registry.js';
+import type { ThinkingLevelOption } from '../usage/plan-limits.js';
 import {
-  type DocumentContext,
   DocumentAiService,
-  NO_CONTEXT,
+  type DocumentAiOptions,
+  type DocumentAiUsage,
 } from './ai/document-ai.service.js';
 import { assignIds } from './build/assign-ids.js';
 import { applyPatch } from './patch/apply-patch.js';
 import { PdfRendererService } from './pdf/pdf-renderer.service.js';
 import { renderAnswerKey } from './render/render-answer-key.js';
-import { formatPoints } from './render/format.js';
-import { totalPoints } from './render/layout.js';
+import { renderDocumentDocx } from './render/render-docx.js';
 import { renderDocumentHtml } from './render/render-html.js';
 import {
   DOCUMENT_SCHEMA_VERSION,
   type StoredDocument,
   upgradeDocument,
 } from './schemas/document.schema.js';
-import type { DocumentHeader } from './schemas/header.schema.js';
 import type { DocumentPatch } from './schemas/patch.schema.js';
-import type { DocumentTheme } from './schemas/theme.schema.js';
-import type { DocumentContent } from './schemas/content.schema.js';
 import type { DocumentType } from './types/document-type.js';
 import { getDocumentType } from './types/registry.js';
 
-export interface GenerateDocumentInput {
-  type: DocumentType;
-  prompt: string;
-  conversationId?: string;
-  header?: DocumentHeader;
-  theme?: DocumentTheme;
-  /** Must be within the plan's max thinking level (403 otherwise). */
-  thinkingLevel: ThinkingLevelOption;
+/**
+ * AI work on documents comes only from the chat (AiService): the turn picks
+ * the model, and `request` is the teacher's message with the conversation and
+ * file context already added.
+ */
+interface ChatDocumentInput extends DocumentAiOptions {
+  /** What the AI receives. */
+  request: string;
 }
+
+export interface GenerateDocumentInput extends ChatDocumentInput {
+  type: DocumentType;
+  /** The teacher's own message, stored so a later regenerate can reuse it. */
+  prompt: string;
+  conversationId: string;
+}
+
+export type ReviseDocumentInput = ChatDocumentInput;
+
+export type RegenerateDocumentInput = ChatDocumentInput;
 
 export interface PatchDocumentInput {
   version: number;
   ops: DocumentPatch;
 }
 
-export interface ReviseDocumentInput {
-  version: number;
-  instruction: string;
-  thinkingLevel: ThinkingLevelOption;
+/** The saved document plus what the AI spent on it. */
+export interface AiDocumentResult {
+  kind: 'document';
+  view: DocumentView;
+  usage: DocumentAiUsage;
 }
 
-export interface RegenerateDocumentInput {
-  version: number;
-  /** Falls back to the request the document was last generated from. */
-  prompt?: string;
-  thinkingLevel: ThinkingLevelOption;
-  /**
-   * Off (default): the conversation is read as it was when the document was
-   * created, so a regenerate stays about the same thing. On: as it is now.
-   */
-  refreshContext?: boolean;
+/** Nothing was saved and no credit was spent: the AI needs the teacher to answer this first. */
+export interface AiClarificationResult {
+  kind: 'clarification';
+  question: string;
+  usage: DocumentAiUsage;
 }
 
 export interface DocumentView {
   id: string;
   type: DocumentType;
   conversationId: string | null;
-  /** Send it back with every change; a stale value is answered with 409. */
+  /** Send it back with every manual change; a stale value is answered with 409. */
   version: number;
   prompt: string | null;
   aiRevisions: number;
@@ -97,9 +91,21 @@ export interface DocumentView {
   updatedAt: Date;
 }
 
+export interface ConversationDocumentSummary {
+  id: string;
+  type: DocumentType;
+  title: string;
+  createdAt: Date;
+}
+
 export interface RenderedPdf {
   filename: string;
   pdf: Buffer;
+}
+
+export interface RenderedDocx {
+  filename: string;
+  docx: Buffer;
 }
 
 const COMBINING_MARKS = /\p{M}/gu;
@@ -117,41 +123,6 @@ function toFilename(title: string, fallback: string): string {
   return slug || fallback;
 }
 
-// Context limits (see specs/document-blocks.md, Phase 3).
-const HISTORY_LIMIT = 20;
-const MAX_CHARS_PER_MESSAGE = 6000;
-const MAX_HISTORY_CHARS = 40_000;
-const CHUNK_LIMIT = 12;
-const MAX_CHUNK_CHARS = 24_000;
-const MAX_QUERY_CHARS = 1000;
-
-/** «Título» (10 questões, 10 pontos): how the chat describes a document. */
-function describe(content: DocumentContent): string {
-  const questions = content.sections.flatMap((section) => section.blocks).filter(isScoredBlock).length;
-  const total = totalPoints(content);
-  const details = [
-    questions > 0 ? `${questions} ${questions === 1 ? 'questão' : 'questões'}` : null,
-    total > 0 ? formatPoints(total) : null,
-  ].filter(Boolean);
-
-  return `«${content.title}»${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
-}
-
-/** "a avaliação" → "da avaliação", "o plano de aula" → "do plano de aula". */
-function ofLabel(chatLabel: string): string {
-  return chatLabel.replace(/^a /, 'da ').replace(/^o /, 'do ');
-}
-
-function needsClarification(question: string): UnprocessableEntityException {
-  return new UnprocessableEntityException({
-    statusCode: 422,
-    error: 'Unprocessable Entity',
-    code: 'NEEDS_CLARIFICATION',
-    message: question,
-    question,
-  });
-}
-
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
@@ -161,40 +132,31 @@ export class DocumentsService {
     private readonly documentAi: DocumentAiService,
     private readonly pdfRenderer: PdfRendererService,
     private readonly usageService: UsageService,
-    private readonly conversations: ConversationContextService,
   ) {}
 
   async generate(
     user: UsageSubject,
     input: GenerateDocumentInput,
-  ): Promise<DocumentView> {
+  ): Promise<AiDocumentResult | AiClarificationResult> {
     const type = getDocumentType(input.type);
-    // Fail before paying for the AI call (or creating a conversation); checked again under lock on insert.
+    // Fail before paying for the AI call; checked again under lock on insert.
     const allowance = await this.usageService.getDocumentAllowance(this.db, user);
     this.usageService.assertThinkingLevelAllowed(allowance, input.thinkingLevel);
     this.usageService.assertCanSpendDocumentCredit(allowance, 'GENERATE');
 
-    const conversation = input.conversationId
-      ? await this.conversations.getOrCreate(user.id, input.conversationId)
-      : null;
-    const context = conversation
-      ? await this.loadContext(user.id, conversation, input.prompt)
-      : NO_CONTEXT;
-
-    const generated = await this.documentAi.generate(type, input.prompt, context, input.thinkingLevel);
+    const generated = await this.documentAi.generate(type, input.request, input);
     if (generated.kind === 'clarification') {
       // Nothing is stored and no credit is spent: the teacher answers and asks again.
-      throw needsClarification(generated.question);
+      return generated;
     }
 
+    // The header text comes from what the teacher said in the chat; the theme starts at the defaults.
     const document = type.schemas.document.parse({
       schemaVersion: DOCUMENT_SCHEMA_VERSION,
       content: assignIds(generated.content),
-      header: input.header ?? {},
-      theme: input.theme ?? {},
+      header: generated.header,
+      theme: {},
     });
-    // One clock for the row and its chat messages, so regenerate's "as it was" cut-off is exact.
-    const createdAt = new Date();
 
     const row = await this.db.transaction(async (tx) => {
       await this.usageService.lockUser(tx, user.id);
@@ -208,10 +170,9 @@ export class DocumentsService {
         .values({
           userId: user.id,
           type: input.type,
-          conversationId: conversation?.id ?? null,
+          conversationId: input.conversationId,
           document,
           prompt: input.prompt,
-          createdAt,
         })
         .returning();
 
@@ -221,21 +182,41 @@ export class DocumentsService {
         reason: 'GENERATE',
       });
 
-      if (conversation) {
-        await this.conversations.recordTurn(tx, {
-          conversationId: conversation.id,
-          userContent: input.prompt,
-          iaContent: `Criei ${type.chatLabel} ${describe(document.content)}.`,
-          metadata: { documentId: inserted.id, documentType: type.type },
-          title: document.content.title,
-          at: createdAt,
-        });
-      }
-
       return inserted;
     });
 
-    return this.toView(row, document);
+    return { kind: 'document', view: this.toView(row, document), usage: generated.usage };
+  }
+
+  /** Id, type, title and creation time of the conversation's documents, newest first. */
+  async listByConversation(
+    userId: string,
+    conversationId: string,
+    limit: number,
+  ): Promise<ConversationDocumentSummary[]> {
+    const rows = await this.db
+      .select({
+        id: documentsTable.id,
+        type: documentsTable.type,
+        document: documentsTable.document,
+        createdAt: documentsTable.createdAt,
+      })
+      .from(documentsTable)
+      .where(
+        and(
+          eq(documentsTable.userId, userId),
+          eq(documentsTable.conversationId, conversationId),
+        ),
+      )
+      .orderBy(desc(documentsTable.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      title: row.document?.content?.title ?? 'Sem título',
+      createdAt: row.createdAt,
+    }));
   }
 
   async get(id: string, userId: string): Promise<DocumentView> {
@@ -297,81 +278,55 @@ export class DocumentsService {
     return this.toView(row, result.document);
   }
 
-  /** The AI turns the instruction into a patch; same engine as `patch`. */
+  /**
+   * The AI turns the request into a patch; same engine as `patch`. Works on
+   * the latest version; a change saved meanwhile is answered with 409.
+   */
   async revise(
     id: string,
     user: UsageSubject,
     input: ReviseDocumentInput,
-  ): Promise<DocumentView> {
+  ): Promise<AiDocumentResult> {
     const current = await this.get(id, user.id);
-    this.assertVersion(current, input.version);
     await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
-    // Edits are not written to the chat: ten small ones would push the real conversation out.
-    const conversation = await this.ownedConversation(user.id, current.conversationId);
-    const context = conversation
-      ? await this.loadContext(user.id, conversation, input.instruction)
-      : NO_CONTEXT;
-
-    const document = await this.documentAi.revise(
+    const revised = await this.documentAi.revise(
       getDocumentType(current.type),
       current.document,
-      input.instruction,
-      context,
-      input.thinkingLevel,
+      input.request,
+      input,
     );
+    const view = await this.saveAiRevision(current, user, { document: revised.document });
 
-    return this.saveAiRevision(current, user, { document });
+    return { kind: 'document', view, usage: revised.usage };
   }
 
-  /** New content from the prompt; header and theme are kept. */
+  /**
+   * New content from the request; the theme and the teacher's header are
+   * kept, and header text the AI found only fills fields that are empty.
+   */
   async regenerate(
     id: string,
     user: UsageSubject,
     input: RegenerateDocumentInput,
-  ): Promise<DocumentView> {
+  ): Promise<AiDocumentResult | AiClarificationResult> {
     const current = await this.get(id, user.id);
-    this.assertVersion(current, input.version);
-
-    const prompt = input.prompt ?? current.prompt;
-    if (!prompt) {
-      throw new BadRequestException('A prompt is required');
-    }
-
     await this.assertCanChangeWithAi(this.db, user, current, input.thinkingLevel);
 
     const type = getDocumentType(current.type);
-    const conversation = await this.ownedConversation(user.id, current.conversationId);
-    const context = conversation
-      ? await this.loadContext(
-          user.id,
-          conversation,
-          prompt,
-          input.refreshContext ? undefined : current.createdAt,
-        )
-      : NO_CONTEXT;
-
-    const generated = await this.documentAi.generate(type, prompt, context, input.thinkingLevel);
+    const generated = await this.documentAi.generate(type, input.request, input);
     if (generated.kind === 'clarification') {
-      throw needsClarification(generated.question);
+      return generated;
     }
 
     const document = type.schemas.document.parse({
       ...current.document,
+      header: { ...generated.header, ...current.document.header },
       content: assignIds(generated.content),
     });
+    const view = await this.saveAiRevision(current, user, { document });
 
-    const turn: RecordedTurn | undefined = conversation
-      ? {
-          conversationId: conversation.id,
-          userContent: input.prompt ?? `Gere novamente «${current.document.content.title}».`,
-          iaContent: `Gerei uma nova versão ${ofLabel(type.chatLabel)} ${describe(document.content)}.`,
-          metadata: { documentId: current.id, documentType: type.type },
-          title: document.content.title,
-        }
-      : undefined;
-
-    return this.saveAiRevision(current, user, { document, prompt }, turn);
+    return { kind: 'document', view, usage: generated.usage };
   }
 
   async renderPreview(id: string, userId: string): Promise<string> {
@@ -400,6 +355,21 @@ export class DocumentsService {
     };
   }
 
+  async renderDocx(id: string, userId: string): Promise<RenderedDocx> {
+    const { document, type } = await this.get(id, userId);
+    const definition = getDocumentType(type);
+
+    return {
+      filename: `${toFilename(document.content.title, definition.filenameFallback)}.docx`,
+      docx: await renderDocumentDocx(
+        document.content,
+        document.header,
+        document.theme,
+        definition,
+      ),
+    };
+  }
+
   async renderAnswerKeyPreview(id: string, userId: string): Promise<string> {
     const { document, type } = await this.get(id, userId);
     const definition = this.answerKeyType(type);
@@ -425,54 +395,6 @@ export class DocumentsService {
       throw new BadRequestException('This type of document has no answer key');
     }
     return definition;
-  }
-
-  /** The document's conversation, if it still exists and is the user's. */
-  private async ownedConversation(
-    userId: string,
-    conversationId: string | null,
-  ): Promise<ConversationRef | null> {
-    return conversationId ? this.conversations.findOwned(userId, conversationId) : null;
-  }
-
-  /**
-   * The history the request may refer to and the documents retrieved for it.
-   * `before` reads the conversation as it was at that moment.
-   */
-  private async loadContext(
-    userId: string,
-    conversation: ConversationRef,
-    request: string,
-    before?: Date,
-  ): Promise<DocumentContext> {
-    const history = await this.conversations.loadHistory(conversation.id, {
-      limit: HISTORY_LIMIT,
-      before,
-      completedOnly: true,
-      maxCharsPerMessage: MAX_CHARS_PER_MESSAGE,
-      maxTotalChars: MAX_HISTORY_CHARS,
-    });
-
-    // "Based on the conversation" alone is a useless embedding query: add what it points at.
-    const recentRequests = history
-      .filter(({ role }) => role === 'USER')
-      .slice(-2)
-      .reverse()
-      .map(({ content }) => content ?? '');
-    const query = [request, ...recentRequests, conversation.title ?? '']
-      .filter((part) => part.trim().length > 0)
-      .join('\n')
-      .slice(0, MAX_QUERY_CHARS);
-
-    const chunks = await this.conversations.retrieve({
-      query,
-      userId,
-      conversationId: conversation.id,
-      limit: CHUNK_LIMIT,
-      maxChars: MAX_CHUNK_CHARS,
-    });
-
-    return { history, chunks };
   }
 
   /**
@@ -505,7 +427,6 @@ export class DocumentsService {
     current: DocumentView,
     user: UsageSubject,
     changes: { document: StoredDocument; prompt?: string },
-    turn?: RecordedTurn,
   ): Promise<DocumentView> {
     const row = await this.db.transaction(async (tx) => {
       await this.usageService.lockUser(tx, user.id);
@@ -527,10 +448,6 @@ export class DocumentsService {
           documentId: updated.id,
           reason: 'EXTRA_CHANGES',
         });
-      }
-
-      if (updated && turn) {
-        await this.conversations.recordTurn(tx, turn);
       }
 
       return updated;

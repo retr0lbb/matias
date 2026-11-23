@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
 import { renderBlockTitle } from './shared.js';
+import { blockTitle, body } from '../render/docx-kit.js';
 
 export const MAX_TEXT_LENGTH = 6000;
 
@@ -14,6 +15,7 @@ export const textBlock = defineContentBlock({
   },
   renderHtml: (block) =>
     `<div class="block block-text">${renderBlockTitle(block.title)}<div class="block-text-body">${escapeHtml(block.body)}</div></div>`,
+  renderDocx: (block, context) => [...blockTitle(context, block.title), body(context, block.body, 1.2)],
   css: `
 .block-text-body { white-space: pre-wrap; }
 `,

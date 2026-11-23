@@ -1,5 +1,7 @@
 # Especificação: geração de chat via stream (SSE)
 
+> **Update (2026-11-22):** `POST /ai/chat`, `AiService.chat()` and every model's `generate()` were removed. `POST /ai/chat/stream` is now the only chat route, and models only implement `generateStream()`. Passages below about the non-streaming path are history.
+
 ## Context
 `POST /ai/chat` waits for the full Gemini answer (`provider.generate()` → `generateContent`) before responding, so the user sees nothing until generation ends. We add a parallel streaming path: a new `POST /ai/chat/stream` route that sends tokens as Server-Sent Events while they're generated. Constraints from the user:
 - Do **not** delete or modify any `generate()` function. Each model gets a new `generateStream()`.

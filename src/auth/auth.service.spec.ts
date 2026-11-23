@@ -19,6 +19,9 @@ const buildUser = (overrides: Partial<User> = {}): User => ({
   emailVerified: false,
   passwordHash: 'hashed-password',
   loginProvider: 'LOCAL',
+  googleSubject: null,
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  cycleAnchorAt: new Date('2026-01-01T00:00:00.000Z'),
   ...overrides,
 });
 
@@ -28,6 +31,7 @@ interface DbMock {
   where: Mock;
   insert: Mock;
   values: Mock;
+  returning: Mock;
 }
 
 const createDbMock = (): DbMock => {
@@ -37,11 +41,13 @@ const createDbMock = (): DbMock => {
     where: vi.fn(),
     insert: vi.fn(),
     values: vi.fn(),
+    returning: vi.fn(),
   } as unknown as DbMock;
 
   db.select.mockReturnValue(db);
   db.from.mockReturnValue(db);
   db.insert.mockReturnValue(db);
+  db.values.mockReturnValue(db);
 
   return db;
 };
@@ -63,7 +69,7 @@ describe('AuthService', () => {
   beforeEach(async () => {
     db = createDbMock();
     db.where.mockResolvedValue([]);
-    db.values.mockResolvedValue(undefined);
+    db.returning.mockResolvedValue([]);
     credentials = createCredentialsMock();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -100,14 +106,17 @@ describe('AuthService', () => {
 
     it('should hash the password and insert the new user when the email is free', async () => {
       // Arrange
+      const created = buildUser({ email: payload.email, name: payload.name });
       db.where.mockResolvedValue([]);
+      db.returning.mockResolvedValue([created]);
       credentials.hashPassword.mockResolvedValue('hashed-password');
 
       // Act
       const result = await service.createAccount(payload);
 
       // Assert
-      expect(result).toBeUndefined();
+      expect(result).toBe(created);
+      expect(db.returning).toHaveBeenCalledTimes(1);
       expect(credentials.hashPassword).toHaveBeenCalledWith('plain-password');
       expect(db.insert).toHaveBeenCalledWith(userTable);
       expect(db.values).toHaveBeenCalledWith({
@@ -189,18 +198,20 @@ describe('AuthService', () => {
   describe('logInAccount', () => {
     const payload = { email: 'test@example.com', password: 'plain-password' };
 
-    it('should resolve when the credentials are valid', async () => {
+    it('should return the user when the credentials are valid', async () => {
       // Arrange
-      db.where.mockResolvedValue([
-        buildUser({ email: payload.email, passwordHash: 'hashed-password' }),
-      ]);
+      const user = buildUser({
+        email: payload.email,
+        passwordHash: 'hashed-password',
+      });
+      db.where.mockResolvedValue([user]);
       credentials.comparePassword.mockResolvedValue(true);
 
       // Act
       const result = await service.logInAccount(payload);
 
       // Assert
-      expect(result).toBeUndefined();
+      expect(result).toBe(user);
       expect(credentials.comparePassword).toHaveBeenCalledWith(
         'plain-password',
         'hashed-password',

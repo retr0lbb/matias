@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
+import { borderedTable, caption, spacer } from '../render/docx-kit.js';
 
 export const MAX_TABLE_COLUMNS = 6;
 export const MAX_TABLE_ROWS = 40;
@@ -34,6 +35,11 @@ export const tableBlock = defineContentBlock({
 
     return `<div class="block block-table"><table>${caption}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   },
+  renderDocx: (block, context) => [
+    ...caption(context, block.caption),
+    borderedTable(context, [block.columns, ...block.rows]),
+    spacer(context, 1.2),
+  ],
   css: `
 .block-table table { width: 100%; border-collapse: collapse; }
 .block-table caption { text-align: left; font-weight: bold; margin-bottom: 0.3em; }

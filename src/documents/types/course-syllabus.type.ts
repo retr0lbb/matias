@@ -5,6 +5,8 @@ export const courseSyllabusType = defineDocumentType({
   type: 'course_syllabus',
   label: 'Plano de ensino',
   chatLabel: 'o plano de ensino',
+  judgeSummary:
+    'the plan for a whole course or term: plano de ensino, plano de curso, ementa, cronograma',
   filenameFallback: 'plano-de-ensino',
   allowedBlocks: ['text', 'list', 'table'],
   hasAnswerKey: false,

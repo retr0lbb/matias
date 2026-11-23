@@ -35,6 +35,8 @@ interface DocumentTypeInput {
   label: string;
   /** How the chat refers to it, with its article: "a avaliação", "o plano de aula". */
   chatLabel: string;
+  /** One line for the chat's judge: what the type is and the words teachers use for it. */
+  judgeSummary: string;
   /** File name (ASCII, no extension) when the title gives nothing usable. */
   filenameFallback: string;
   /** Block kinds the type may contain. Also decides which kinds the AI is offered. */

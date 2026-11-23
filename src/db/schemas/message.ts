@@ -9,7 +9,6 @@ import {
     uuid, 
     varchar
 } from "drizzle-orm/pg-core";
-import type { DocumentType } from "../../documents/types/document-type.js";
 import { conversationsTable } from "./conversation.js";
 
 export const roleEnum = pgEnum("roles", ["USER", "IA"])
@@ -34,18 +33,16 @@ export type JudgeMetadata = {
 
 /**
  * Stored on IA messages. Generation fields are missing when the stream was
- * aborted or failed before the model finished. Messages written by the
- * documents module carry `documentId`/`documentType` and no `tier`.
+ * aborted or failed before the model finished.
  */
 export type MessageMetadata = {
-    tier?: "CHEAP" | "NORMAL" | "EXPENSIVE",
-    /** The document this message reports (created or regenerated in the documents module). */
-    documentId?: string,
-    documentType?: DocumentType,
+    tier: "CHEAP" | "NORMAL" | "EXPENSIVE",
     /** AUTO = judge picked the tier; MANUAL = user picked it. */
     selection?: "AUTO" | "MANUAL",
     /** Tier the judge wanted before AUTO downgraded it for lack of quota. */
     downgradedFrom?: "CHEAP" | "NORMAL" | "EXPENSIVE",
+    /** Tier picked (judge or user) before a document turn raised it to what the document needs. */
+    upgradedFrom?: "CHEAP" | "NORMAL" | "EXPENSIVE",
     /** User-facing thinking level the turn ran with (already allowed by the plan). */
     thinkingOption?: "DEFAULT" | "HIGH" | "ULTRA_HIGH",
     /** Model requested by the app. */
@@ -58,8 +55,30 @@ export type MessageMetadata = {
     latencyMs?: number,
     tokens?: MessageTokenUsage,
     thinking?: string,
-    judge?: JudgeMetadata
+    judge?: JudgeMetadata,
+    /** Tools called this turn: name, outcome and latency only (no arguments or results). */
+    tools?: { name: string, ok: boolean, latencyMs: number }[],
+    /** Document work of this turn. ASK_HEADER marks the turn that asked for header details. */
+    document?: DocumentTurnMetadata
 }
+
+export type DocumentTurnMetadata =
+    | { action: "ASK_HEADER", type: string, missing: string[] }
+    | {
+        action: "CREATE" | "REVISE" | "REGENERATE",
+        type: string,
+        ok: boolean,
+        /** The saved document; missing when it failed or the AI asked a question instead. */
+        id?: string,
+        /** The AI asked the teacher what the document should be about; nothing was saved. */
+        clarification?: boolean,
+        /** Document AI usage, summed over its attempts. */
+        modelName?: string,
+        modelId?: string,
+        latencyMs?: number,
+        attempts?: number,
+        tokens?: MessageTokenUsage
+    }
 
 export const messagesTable = pgTable("messages", 
     {

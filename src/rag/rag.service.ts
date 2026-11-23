@@ -29,7 +29,7 @@ export interface RagSearchResult {
 export interface RagSearchOptions {
   documentId?: string;
   conversationId?: string;
-  /** Most similar chunks to return. Default 5 (the chat). */
+  /** How many chunks to return (default 5). Document generation asks for more. */
   limit?: number;
 }
 

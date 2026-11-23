@@ -1,7 +1,10 @@
--- Hand-written. A rename must keep the data (the generator would drop and recreate the table).
+-- Hand-written. Replaces 20261118182314_document_types and 20261118185838_group_work_type from
+-- feat/document-generation, re-dated after 20261122050422_google_integrations so databases that
+-- already applied main's migrations still run it (drizzle skips migrations older than the last one).
+-- A rename must keep the data (the generator would drop and recreate the table).
 -- Postgres keeps the old names of the primary key, foreign keys and index, so they are renamed too:
 -- that way the snapshot, built from the new schema, matches the real database.
-CREATE TYPE "document_type" AS ENUM('assessment', 'homework', 'lesson_plan', 'course_syllabus');--> statement-breakpoint
+CREATE TYPE "document_type" AS ENUM('assessment', 'homework', 'lesson_plan', 'course_syllabus', 'group_work');--> statement-breakpoint
 ALTER TABLE "assessments" RENAME TO "documents";--> statement-breakpoint
 -- Every document that exists today is an assessment.
 ALTER TABLE "documents" ADD COLUMN "type" "document_type" DEFAULT 'assessment' NOT NULL;--> statement-breakpoint

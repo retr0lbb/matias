@@ -1,0 +1,34 @@
+# Dependencies and build output are produced inside the image
+node_modules
+dist
+*.tsbuildinfo
+
+# Secrets: pass them at runtime (-e / --env-file), never bake them into the image
+.env
+.env.*
+!.env.example
+
+# VCS, editors, tooling
+.git
+.gitignore
+.vscode
+.idea
+.tmp
+.temp
+.vitest
+coverage
+*.log
+
+# Docs, tests and local files not needed to build or run
+specs
+test
+**/*.spec.ts
+_test.http
+*.md
+*.pdf
+*.docx
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+docker-compose*.yaml

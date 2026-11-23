@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { escapeHtml } from '../render/escape-html.js';
 import { defineContentBlock } from './block.js';
 import { renderBlockTitle, renderLabelledItems } from './shared.js';
+import { blockTitle, framed, labelled, labelledItems, spacer } from '../render/docx-kit.js';
 
 const item = z.string().min(1).max(300);
 
@@ -48,6 +49,23 @@ export const researchTaskBlock = defineContentBlock({
       '</div>',
     ].join('');
   },
+  renderDocx: (block, context) => [
+    framed(
+      context,
+      [
+        ...blockTitle(context, block.title),
+        labelled(context, 'Questão de pesquisa:', block.question),
+        ...labelledItems(context, 'Pesquise sobre:', block.topics),
+        ...labelledItems(context, 'Perguntas para orientar a pesquisa:', block.guidingQuestions, true),
+        ...labelledItems(context, 'Fontes sugeridas:', block.suggestedSources),
+        ...(block.citationStyle
+          ? [labelled(context, 'Citação das fontes:', block.citationStyle)]
+          : []),
+      ],
+      'left',
+    ),
+    spacer(context, 1.2),
+  ],
   css: `
 .block-research { border-left: 3px solid var(--accent); padding-left: 0.8em; }
 .research-question, .research-findings { white-space: pre-wrap; margin-bottom: 0.3em; }

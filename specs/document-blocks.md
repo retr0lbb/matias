@@ -1,5 +1,10 @@
 # Plan: generic documents (blocks + types) with conversation context
 
+> **Merged with `document-generation-in-chat.md` (2026-11-23).** The AI routes (`POST /documents`,
+> `/revise`, `/regenerate`) and `recordTurn` are gone: the chat stream is the only AI entry point and
+> saves its own messages. `NEEDS_CLARIFICATION` became a chat answer. Migrations were re-dated into
+> `20261123120000_document_types`. See [`merge-documents-into-chat.md`](merge-documents-into-chat.md).
+
 Single source of truth for the documents module. `specs/document-generation.md` (the first plan, in
 Portuguese) is history; `specs/document-credits.md` covers quota.
 

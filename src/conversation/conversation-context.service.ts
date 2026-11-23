@@ -3,7 +3,7 @@ import { InjectDrizzle } from "@nestjs/drizzle";
 import { and, desc, eq, isNull, lt, or } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { conversationsTable } from "../db/schemas/conversation.js";
-import { type MessageMetadata, messagesTable } from "../db/schemas/message.js";
+import { messagesTable } from "../db/schemas/message.js";
 import { type RagSearchResult, RagService } from "../rag/rag.service.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,30 +40,10 @@ export interface RetrieveOptions {
   maxChars?: number;
 }
 
-/** The database or an open transaction. */
-export type ConversationExecutor = Pick<NodePgDatabase, "insert" | "update">;
-
-export interface RecordedTurn {
-  conversationId: string;
-  /** What the teacher asked. */
-  userContent: string;
-  /** What MATIAS answers in the chat, e.g. a one-line summary of a generated document. */
-  iaContent: string;
-  metadata: MessageMetadata;
-  tokens?: { input: number; output: number };
-  /** Becomes the conversation's title when it has none. */
-  title?: string;
-  /**
-   * When the turn happened. The USER message gets this time and the IA message 1 ms later, so the
-   * history keeps them in order (both inserts share one transaction, where `now()` doesn't move).
-   */
-  at?: Date;
-}
-
 /**
- * The conversation a request belongs to, its history, the documents retrieved
- * for it, and writing a turn back. Shared by the chat and the documents module
- * so both apply the same ownership rules and see the same history.
+ * The conversation a request belongs to, its history and the documents
+ * retrieved for it. The chat stream uses it for every turn, document turns
+ * included, so they apply the same ownership rules and see the same history.
  */
 @Injectable()
 export class ConversationContextService {
@@ -108,16 +88,6 @@ export class ConversationContextService {
       .returning();
 
     return { id: created.id, title: created.title };
-  }
-
-  /** The user's conversation, or null when it no longer exists or isn't theirs. Never creates one. */
-  async findOwned(userId: string, conversationId: string): Promise<ConversationRef | null> {
-    const [found] = await this.db
-      .select({ id: conversationsTable.id, title: conversationsTable.title })
-      .from(conversationsTable)
-      .where(and(eq(conversationsTable.id, conversationId), eq(conversationsTable.userId, userId)));
-
-    return found ?? null;
   }
 
   /** Chronological, newest messages kept when something has to be left out. */
@@ -184,39 +154,6 @@ export class ConversationContextService {
     } catch (error) {
       this.logger.error("[RAG] search failed", error);
       return [];
-    }
-  }
-
-  /** Writes a USER + IA message pair; call inside the same transaction as the change it reports. */
-  async recordTurn(executor: ConversationExecutor, turn: RecordedTurn): Promise<void> {
-    const at = turn.at ?? new Date();
-
-    await executor.insert(messagesTable).values({
-      conversationId: turn.conversationId,
-      role: "USER",
-      content: turn.userContent,
-      createdAt: at,
-    });
-
-    await executor.insert(messagesTable).values({
-      conversationId: turn.conversationId,
-      role: "IA",
-      content: turn.iaContent,
-      status: "COMPLETED",
-      // No `expense`: this is not a model message and must not count against the chat quota.
-      metadata: turn.metadata,
-      inputTokens: turn.tokens?.input ?? 0,
-      outputTokens: turn.tokens?.output ?? 0,
-      createdAt: new Date(at.getTime() + 1),
-    });
-
-    // The judge titles a conversation only while its history is empty, so a
-    // conversation that starts with a document would otherwise never get one.
-    if (turn.title) {
-      await executor
-        .update(conversationsTable)
-        .set({ title: turn.title })
-        .where(and(eq(conversationsTable.id, turn.conversationId), isNull(conversationsTable.title)));
     }
   }
 }
