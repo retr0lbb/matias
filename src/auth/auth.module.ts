@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { ClassroomModule } from "../classroom/classroom.module.js";
 import { SharedModule } from "../shared/shared.module.js";
 import { AuthController } from "./auth.controller.js";
 import { AuthService } from "./auth.service.js";
@@ -11,7 +12,7 @@ import { EmailVerificationMailer } from "./providers/email-verification.mailer.j
 import { SessionAuth } from "./providers/session-auth-provider.js";
 
 @Module({
-	imports: [SharedModule],
+	imports: [SharedModule, ClassroomModule],
 	controllers: [AuthController, EmailVerificationController, MeController, OidcController],
 	providers: [AuthService, SessionAuth, EmailVerificationMailer, AccountLinker, DrizzleAuthStore],
 })

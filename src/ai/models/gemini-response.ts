@@ -23,13 +23,3 @@ export function toTokenUsage(usage: GenerateContentResponse["usageMetadata"]): M
 		total: usage?.totalTokenCount ?? 0,
 	};
 }
-
-/** Thought-summary text; only present when the request set `includeThoughts`. */
-export function extractThoughts(response: GenerateContentResponse): string | undefined {
-	const thoughts = (response.candidates?.[0]?.content?.parts ?? [])
-		.filter((part) => part.thought && part.text)
-		.map((part) => part.text)
-		.join("");
-
-	return thoughts || undefined;
-}
