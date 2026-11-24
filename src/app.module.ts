@@ -18,6 +18,7 @@ import { BeliargeModule } from "./shared/crons/mr_beliarge/beliarge.module.js";
 import { SharedModule } from "./shared/shared.module.js";
 import { SubscriptionModule } from "./subscription/subscription.module.js";
 import { UsageModule } from "./usage/usage.module.js";
+import { HealthController } from "./health.controller.js";
 
 /**
  * The OIDC callback URL with `:provider` in it, which the library replaces by
@@ -94,5 +95,6 @@ function oidcCallbackUrl(configured: string): string {
 		BeliargeModule,
 		OlafModule,
 	],
+	controllers: [HealthController],
 })
 export class AppModule {}
